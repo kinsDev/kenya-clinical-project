@@ -161,17 +161,22 @@ class ExperimentRunner:
 EXPERIMENT_BATCHES = {
     1: [
         ("baseline", "baseline"),
-        ("fast", "fast_training")
+        ("fast", "fast")
     ],
     2: [
-        ("aggressive", "aggressive_training"),
+        ("aggressive", "aggressive"),
         ("data_augmented", "data_augmented")
     ],
     3: [
-        ("balanced", "balanced_training"),
-        ("quality", "quality_training")
+        ("balanced", "balanced"),
+        ("quality", "quality")
+    ],
+    4: [
+        ("enhanced", "enhanced"),
+        ("optimized", "optimized")
     ]
 }
+
 
 def run_batch_experiments(batch_number=1):
     if batch_number not in EXPERIMENT_BATCHES:
