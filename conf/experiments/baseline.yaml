@@ -1,0 +1,32 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+vignette_training:
+  epochs: 12
+  batch_size: 4
+  eval_batch_size: 4
+  gradient_accumulation_steps: 2
+  learning_rate: 2e-4
+  warmup_steps: 30
+  weight_decay: 0.01
+  eval_steps: 20
+  save_steps: 40
+  early_stopping_patience: 5
+  label_smoothing_factor: 0.1
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: false
+
+generation:
+  max_length: 256
+  num_beams: 2
+
+paths:
+  output_dir: ./experiments/baseline
+  logs_dir: ./experiments/baseline/logs

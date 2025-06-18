@@ -1,0 +1,30 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+data:
+  augmentation:
+    enabled: true
+    synonym_replacement: true
+    noise_injection: true
+    augmentation_factor: 2
+
+vignette_training:
+  epochs: 8
+  batch_size: 4
+  eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2e-4
+  warmup_steps: 75
+  weight_decay: 0.01
+  eval_steps: 20
+  save_steps: 40
+  early_stopping_patience: 6
+  label_smoothing_factor: 0.15
+
+paths:
+  output_dir: ./experiments/data_augmented
+  logs_dir: ./experiments/data_augmented/logs
