@@ -11,8 +11,8 @@ class MedicalT5Trainer:
     def __init__(self, config: DictConfig):
         self.config = config
         self.validate_config()
-        self.model_name = self.config.model.name
-        self.output_dir = self.config.paths.output_dir
+        self.model_name = self.config.experiments.model.name
+        self.output_dir = self.config.experiments.paths.output_dir
         try:
             self.tokenizer = T5Tokenizer.from_pretrained(self.model_name)
         except Exception as e:
@@ -23,28 +23,38 @@ class MedicalT5Trainer:
     def validate_config(self):
         """Validate configuration to ensure required keys exist"""
         required_keys = [
-            ('model.name', 'Model name (e.g., t5-small)'),
-            ('paths.output_dir', 'Output directory path'),
-            ('vignette_training.epochs', 'Number of training epochs'),
-            ('vignette_training.batch_size', 'Training batch size'),
-            ('vignette_training.eval_batch_size', 'Evaluation batch size'),
-            ('vignette_training.gradient_accumulation_steps', 'Gradient accumulation steps'),
-            ('vignette_training.warmup_steps', 'Warmup steps'),
-            ('vignette_training.weight_decay', 'Weight decay'),
-            ('vignette_training.learning_rate', 'Learning rate'),
-            ('vignette_training.eval_steps', 'Evaluation steps'),
-            ('vignette_training.save_steps', 'Save steps'),
-            ('vignette_training.early_stopping_patience', 'Early stopping patience'),
-            ('vignette_training.label_smoothing_factor', 'Label smoothing factor'),
-            ('paths.logs_dir', 'Logging directory')
+            ('experiments.model.name', 'Model name (e.g., t5-small)'),
+            ('experiments.paths.output_dir', 'Output directory path'),
+            ('experiments.vignette_training.epochs', 'Number of training epochs'),
+            ('experiments.vignette_training.batch_size', 'Training batch size'),
+            ('experiments.vignette_training.eval_batch_size', 'Evaluation batch size'),
+            ('experiments.vignette_training.gradient_accumulation_steps', 'Gradient accumulation steps'),
+            ('experiments.vignette_training.warmup_steps', 'Warmup steps'),
+            ('experiments.vignette_training.weight_decay', 'Weight decay'),
+            ('experiments.vignette_training.learning_rate', 'Learning rate'),
+            ('experiments.vignette_training.eval_steps', 'Evaluation steps'),
+            ('experiments.vignette_training.save_steps', 'Save steps'),
+            ('experiments.vignette_training.early_stopping_patience', 'Early stopping patience'),
+            ('experiments.vignette_training.label_smoothing_factor', 'Label smoothing factor'),
+            ('experiments.paths.logs_dir', 'Logging directory')
         ]
+        
+        print("🔍 Validating configuration structure...")
+        print(f"Config keys available: {list(self.config.keys())}")
+        
         for key, desc in required_keys:
             try:
-                OmegaConf.select(self.config, key)
+                value = OmegaConf.select(self.config, key)
+                if value is None:
+                    print(f"❌ Missing config key: {key} ({desc})")
+                    print(f"Config structure:\n{OmegaConf.to_yaml(self.config)}")
+                    raise ValueError(f"Missing configuration key: {key}")
+                else:
+                    print(f"✅ Found {key}: {value}")
             except Exception as e:
-                print(f"❌ Missing or invalid config key: {key} ({desc})")
+                print(f"❌ Error accessing config key: {key} ({desc})")
                 print(f"Config structure:\n{OmegaConf.to_yaml(self.config)}")
-                raise ValueError(f"Configuration error: {e}")
+                raise ValueError(f"Configuration error for {key}: {e}")
         print("✅ Configuration validated successfully")
 
     def load_model(self):
@@ -65,7 +75,7 @@ class MedicalT5Trainer:
         """Train the model on vignettes"""
         print("🚀 Starting training...")
         if epochs is None:
-            epochs = self.config.vignette_training.epochs
+            epochs = self.config.experiments.vignette_training.epochs
 
         try:
             train_dataset = load_from_disk('outputs/train_dataset')
@@ -89,18 +99,18 @@ class MedicalT5Trainer:
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
             num_train_epochs=epochs,
-            per_device_train_batch_size=self.config.vignette_training.batch_size,
-            per_device_eval_batch_size=self.config.vignette_training.eval_batch_size,
-            gradient_accumulation_steps=self.config.vignette_training.gradient_accumulation_steps,
-            warmup_steps=self.config.vignette_training.warmup_steps,
-            weight_decay=self.config.vignette_training.weight_decay,
-            learning_rate=self.config.vignette_training.learning_rate,
-            logging_dir=f"{self.config.paths.logs_dir}/training",
+            per_device_train_batch_size=self.config.experiments.vignette_training.batch_size,
+            per_device_eval_batch_size=self.config.experiments.vignette_training.eval_batch_size,
+            gradient_accumulation_steps=self.config.experiments.vignette_training.gradient_accumulation_steps,
+            warmup_steps=self.config.experiments.vignette_training.warmup_steps,
+            weight_decay=self.config.experiments.vignette_training.weight_decay,
+            learning_rate=self.config.experiments.vignette_training.learning_rate,
+            logging_dir=f"{self.config.experiments.paths.logs_dir}/training",
             logging_steps=5,
             eval_strategy="steps",
-            eval_steps=self.config.vignette_training.eval_steps,
+            eval_steps=self.config.experiments.vignette_training.eval_steps,
             save_strategy="steps",
-            save_steps=self.config.vignette_training.save_steps,
+            save_steps=self.config.experiments.vignette_training.save_steps,
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
@@ -108,7 +118,7 @@ class MedicalT5Trainer:
             dataloader_pin_memory=False,
             save_total_limit=3,
             report_to=[],
-            label_smoothing_factor=self.config.vignette_training.label_smoothing_factor,
+            label_smoothing_factor=self.config.experiments.vignette_training.label_smoothing_factor,
             lr_scheduler_type="cosine",
             warmup_ratio=0.1,
             max_grad_norm=1.0,
@@ -128,7 +138,7 @@ class MedicalT5Trainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.experiments.vignette_training.early_stopping_patience)]
         )
 
         print("Starting training...")
@@ -166,17 +176,29 @@ class MedicalT5Trainer:
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    print("🔧 HYDRA CONFIGURATION DEBUG")
+    print("=" * 50)
+    print("✅ MAIN FUNCTION STARTED - LOGGING SHOULD WORK NOW")
+    print("Current working directory:", os.getcwd())
+    print("Config path resolved to:", hydra.core.config_store.ConfigStore.instance().repo)
+    print("=" * 50)
+    
     print("Loaded configuration:")
     print(OmegaConf.to_yaml(cfg))
     print("=" * 60)
     print("PRIORITY FIXES: ENHANCED TRAINING PIPELINE")
     print("=" * 60)
+    
     if torch.cuda.is_available():
         print(f"CUDA available: {torch.cuda.get_device_name(0)}")
         print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     else:
         print("CUDA not available, using CPU")
+    
     try:
+        # Disable struct mode to allow dynamic key access
+        OmegaConf.set_struct(cfg, False)
+        
         trainer = MedicalT5Trainer(cfg)
         os.makedirs(trainer.output_dir, exist_ok=True)
         print("\n🔧 PRIORITY FIXES APPLIED:")
@@ -187,6 +209,8 @@ def main(cfg: DictConfig):
         print("✅ Consistent tokenizer handling")
         print("✅ Added validation")
         print("✅ Enhanced config validation")
+        print("✅ Disabled struct mode for dynamic config access")
+        print("✅ Fixed config path access with experiments prefix")
         print("=" * 40)
         trainer.train()
         print("\n" + "=" * 60)
@@ -195,6 +219,8 @@ def main(cfg: DictConfig):
         print(f"Model saved to: {trainer.output_dir}/final_model")
     except Exception as e:
         print(f"❌ Training failed: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 if __name__ == '__main__':

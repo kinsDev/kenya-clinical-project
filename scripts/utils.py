@@ -3,7 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 import pandas as pd
 from datasets import Dataset
 from transformers import AutoTokenizer
-
+import os
 
 def load_data(file_path: str) -> Dataset:
     """Load data from CSV and convert to Hugging Face Dataset"""
@@ -22,7 +22,7 @@ def tokenize_text(text: str, tokenizer_name: str, max_length: int = 512) -> dict
 
 @hydra.main(
     version_base=None,
-    config_path="/mnt/custom-file-systems/efs/fs-0373d59349458e0d3_fsap-00e091e223fc72272/kenya-healthcare-project/conf",
+    config_path="../conf",  # Fixed: Use relative path
     config_name="config"
 )
 def main(cfg: DictConfig):
@@ -32,7 +32,6 @@ def main(cfg: DictConfig):
     print("PRIORITY FIXES: ENHANCED TRAINING PIPELINE")
     print("=" * 60)
     # You can place additional logic here if needed
-
 
 if __name__ == '__main__':
     main()
