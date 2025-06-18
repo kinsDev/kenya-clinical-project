@@ -1,0 +1,34 @@
+defaults:
+  - _self_
+
+model:
+  name: t5-small
+
+vignette_training:
+  epochs: 3
+  batch_size: 8
+  eval_batch_size: 8
+  gradient_accumulation_steps: 1
+  warmup_steps: 100
+  weight_decay: 0.01
+  learning_rate: 5e-5
+  eval_steps: 100
+  save_steps: 100
+  early_stopping_patience: 3
+  label_smoothing_factor: 0.1
+
+generation:
+  max_length: 256
+  num_beams: 2
+  early_stopping: true
+  do_sample: false
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  save_total_limit: 3
+  gradient_checkpointing: true
+
+paths:
+  output_dir: ./model_outputs
+  logs_dir: ./logs
