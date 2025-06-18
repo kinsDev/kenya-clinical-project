@@ -1,0 +1,43 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+data:
+  augmentation:
+    enabled: true
+    synonym_replacement: true
+    noise_injection: true
+    augmentation_factor: 1.5  # Between baseline (1x) and data_augmented (2x)
+
+vignette_training:
+  epochs: 15  # Slightly more than baseline (12)
+  batch_size: 4  # Keep baseline's stable batch size
+  eval_batch_size: 4
+  gradient_accumulation_steps: 2  # Keep baseline's setting
+  learning_rate: 1.5e-4  # Slightly lower than baseline (2e-4) for stability
+  warmup_steps: 50  # More warmup than baseline (30)
+  weight_decay: 0.015  # Slightly higher regularization
+  eval_steps: 25  # More frequent evaluation
+  save_steps: 50
+  early_stopping_patience: 6  # More patience than baseline (5)
+  label_smoothing_factor: 0.12  # Between baseline (0.1) and data_augmented (0.15)
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true  # Enable for memory efficiency
+
+generation:
+  max_length: 256
+  num_beams: 3  # Between baseline (2) and quality (6)
+  early_stopping: true
+  do_sample: false
+  repetition_penalty: 1.1
+  length_penalty: 1.0
+
+paths:
+  output_dir: ./experiments/enhanced
+  logs_dir: ./experiments/enhanced/logs

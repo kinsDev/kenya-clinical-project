@@ -1,0 +1,36 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+vignette_training:
+  epochs: 14  # Sweet spot between baseline and enhanced
+  batch_size: 3  # Smaller than baseline for more updates
+  eval_batch_size: 6  # Larger eval batch for efficiency
+  gradient_accumulation_steps: 3  # More accumulation to compensate for smaller batch
+  learning_rate: 1.8e-4  # Slightly lower than baseline
+  warmup_steps: 75  # More gradual warmup
+  weight_decay: 0.012  # Balanced regularization
+  eval_steps: 20  # Frequent evaluation like baseline
+  save_steps: 40
+  early_stopping_patience: 7  # More patience for convergence
+  label_smoothing_factor: 0.11  # Slight increase from baseline
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+  
+generation:
+  max_length: 256
+  num_beams: 4  # Higher quality generation
+  early_stopping: true
+  do_sample: false
+  repetition_penalty: 1.15
+  length_penalty: 1.1
+
+paths:
+  output_dir: ./experiments/optimized
+  logs_dir: ./experiments/optimized/logs
