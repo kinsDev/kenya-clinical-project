@@ -1,0 +1,44 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+scheduler:
+  patience: 4
+  factor: 0.6
+  threshold: 0.0005
+  min_lr: 1e-8
+
+vignette_training:
+  epochs: 20           # Increased from 16
+  batch_size: 4        # Increased from 3
+  eval_batch_size: 6
+  gradient_accumulation_steps: 3  # Effective batch size 12
+  learning_rate: 1.6e-4
+  warmup_steps: 80
+  weight_decay: 0.014
+  eval_steps: 20       # Increased from 16
+  save_steps: 32
+  early_stopping_patience: 8
+  label_smoothing_factor: 0.12
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+
+generation:
+  max_length: 320
+  min_length: 70       # Increased from 60
+  num_beams: 5
+  early_stopping: false
+  do_sample: false
+  repetition_penalty: 1.12
+  length_penalty: 1.3  # Increased from 1.25
+  no_repeat_ngram_size: 2
+
+paths:
+  output_dir: ./experiments/optimized_enhanced
+  logs_dir: ./experiments/optimized_enhanced/logs

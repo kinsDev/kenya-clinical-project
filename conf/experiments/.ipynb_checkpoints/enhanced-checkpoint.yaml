@@ -5,6 +5,13 @@ defaults:
 model:
   name: t5-small
 
+# NEW: ReduceLROnPlateau scheduler configuration (balanced for enhanced)
+scheduler:
+  patience: 4          # Balanced patience
+  factor: 0.55         # Moderate reduction factor
+  threshold: 0.0009    # Balanced threshold
+  min_lr: 8e-8         # Moderate minimum LR
+
 data:
   augmentation:
     enabled: true

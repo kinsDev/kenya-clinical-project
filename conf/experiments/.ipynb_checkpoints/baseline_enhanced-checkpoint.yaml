@@ -1,0 +1,46 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+# Conservative scheduler based on baseline_adaptive learnings
+scheduler:
+  patience: 3          # Keep baseline_adaptive's successful setting
+  factor: 0.5          # More conservative than baseline_adaptive (0.4)
+  threshold: 0.0015    # Between baseline_adaptive (0.002) and optimized
+  min_lr: 5e-7         # Between baseline_adaptive (1e-6) and optimized
+
+vignette_training:
+  epochs: 14           # Increased from baseline_adaptive (12)
+  batch_size: 4        # Keep baseline's stable batch size
+  eval_batch_size: 4   # Keep baseline's setting
+  gradient_accumulation_steps: 2  # Keep baseline's setting
+  learning_rate: 1.8e-4  # Use baseline_adaptive's LR (performed well)
+  warmup_steps: 40     # Increased from baseline_adaptive (30)
+  weight_decay: 0.012  # Slightly higher than baseline_adaptive (0.01)
+  eval_steps: 14       # More frequent than baseline_adaptive (15)
+  save_steps: 28       # More frequent saving
+  early_stopping_patience: 7  # More patience than baseline_adaptive (6)
+  label_smoothing_factor: 0.11  # Higher than baseline_adaptive (0.1)
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true  # Enable for better memory usage
+
+# Enhanced generation focusing on length improvement
+generation:
+  max_length: 300      # Increased from baseline's 256
+  min_length: 65       # NEW: Force minimum length
+  num_beams: 4         # Increased from baseline's 2
+  early_stopping: false  # Disable to allow fuller generation
+  do_sample: false
+  repetition_penalty: 1.1   # NEW: Add repetition control
+  length_penalty: 1.25  # NEW: Encourage longer outputs
+  no_repeat_ngram_size: 3   # NEW: Prevent excessive repetition
+
+paths:
+  output_dir: ./experiments/baseline_enhanced
+  logs_dir: ./experiments/baseline_enhanced/logs

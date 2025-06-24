@@ -76,11 +76,16 @@ def compute_rouge_scores(predictions, references):
     }
 
 def evaluate_model(model_path=None, val_path=None):
-    """Evaluate model with robust error handling"""
+    """Evaluate model with enhanced generation parameters for longer predictions"""
     model_path = model_path or os.getenv('MODEL_PATH', './model_outputs/final_model')
     val_path = val_path or os.getenv('VAL_PATH', 'outputs/val_dataset')
 
-    print("🔍 Starting model evaluation...")
+    print("🔍 Starting enhanced model evaluation with longer generation...")
+    print("🔧 PHASE 1 EVALUATION ENHANCEMENTS:")
+    print("✅ Enhanced generation parameters for longer outputs")
+    print("✅ Length-aware evaluation metrics")
+    print("✅ Detailed length distribution analysis")
+    print("=" * 60)
     print(f"Model path: {model_path}")
     print(f"Validation dataset path: {val_path}")
 
@@ -103,6 +108,9 @@ def evaluate_model(model_path=None, val_path=None):
     predictions = []
     references = []
     sample_ids = []
+    prediction_lengths = []
+    reference_lengths = []
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
     model.eval()
@@ -117,38 +125,51 @@ def evaluate_model(model_path=None, val_path=None):
                 sample_ids.append(sample_id)
                 input_ids = torch.tensor([example['input_ids']], device=device)
                 attention_mask = torch.tensor([example['attention_mask']], device=device)
+                
+                # ENHANCED GENERATION PARAMETERS FOR LONGER OUTPUTS
                 outputs = model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    max_length=512,
-                    num_beams=4,
-                    early_stopping=True,
+                    max_length=400,              # Increased from 512
+                    min_length=70,               # Minimum length
+                    num_beams=6,                 # Increased from 4
+                    early_stopping=False,       # Changed - Let it generate more
                     do_sample=False,
                     pad_token_id=tokenizer.pad_token_id,
-                    repetition_penalty=1.2,
-                    length_penalty=1.0,
+                    repetition_penalty=1.15,     # Reduced from 1.2
+                    length_penalty=1.5,          # Favor longer outputs
+                    no_repeat_ngram_size=2,      # Reduced from 3
                 )
                 generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 pred_summary = normalize_for_evaluation(generated_text)
+                
                 labels = example['labels']
                 labels = [token for token in labels if token != -100]
                 ref_text = tokenizer.decode(labels, skip_special_tokens=True)
                 ref_summary = normalize_for_evaluation(ref_text)
+                
                 predictions.append(pred_summary)
                 references.append(ref_summary)
+                
+                # Track lengths for analysis
+                prediction_lengths.append(len(pred_summary.split()))
+                reference_lengths.append(len(ref_summary.split()))
+                
             except Exception as e:
                 print(f"⚠️ Error processing sample {i}: {e}")
                 predictions.append(normalize_for_evaluation(""))
                 references.append(normalize_for_evaluation(""))
                 sample_ids.append(f'ERROR_{i:08d}')
+                prediction_lengths.append(0)
+                reference_lengths.append(0)
 
-    print("📊 Computing metrics...")
-    valid_pairs = [(p, r, sid) for p, r, sid in zip(predictions, references, sample_ids) if p.strip() and r.strip()]
+    print("📊 Computing enhanced metrics with length analysis...")
+    valid_pairs = [(p, r, sid, pl, rl) for p, r, sid, pl, rl in zip(predictions, references, sample_ids, prediction_lengths, reference_lengths) if p.strip() and r.strip()]
     if not valid_pairs:
         print("❌ No valid prediction-reference pairs found!")
         return None
 
-    valid_predictions, valid_references, valid_ids = zip(*valid_pairs)
+    valid_predictions, valid_references, valid_ids, valid_pred_lengths, valid_ref_lengths = zip(*valid_pairs)
     print(f"✅ Computing metrics on {len(valid_pairs)} valid pairs")
 
     try:
@@ -158,44 +179,80 @@ def evaluate_model(model_path=None, val_path=None):
         print(f"❌ Error computing ROUGE: {e}")
         rouge_results = {'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0}
 
+    # Enhanced metrics with length analysis
+    avg_pred_length = np.mean(valid_pred_lengths)
+    avg_ref_length = np.mean(valid_ref_lengths)
+    
     metrics = {
         **rouge_results,
         'num_samples': len(valid_pairs),
-        'avg_pred_length': np.mean([len(p.split()) for p in valid_predictions]),
-        'avg_ref_length': np.mean([len(r.split()) for r in valid_references]),
+        'avg_pred_length': avg_pred_length,
+        'avg_ref_length': avg_ref_length,
+        'length_ratio': avg_pred_length / avg_ref_length if avg_ref_length > 0 else 0,
+        'length_analysis': {
+            'pred_length_std': np.std(valid_pred_lengths),
+            'ref_length_std': np.std(valid_ref_lengths),
+            'min_pred_length': min(valid_pred_lengths),
+            'max_pred_length': max(valid_pred_lengths),
+            'predictions_over_75_words': sum(1 for l in valid_pred_lengths if l >= 75),
+            'predictions_under_50_words': sum(1 for l in valid_pred_lengths if l < 50),
+            'length_target_achievement': avg_pred_length >= 75.0
+        },
         'format_compliance': {
             'all_lowercase': all(p.islower() for p in valid_predictions),
             'no_punctuation': all(not any(c in p for c in '.,!?;:"()[]{}') for p in valid_predictions),
-            'min_word_count': min(len(p.split()) for p in valid_predictions),
+            'min_word_count': min(valid_pred_lengths),
             'empty_predictions': sum(1 for p in valid_predictions if not p.strip())
         }
     }
 
-    print("\n" + "="*60)
-    print("🎯 EVALUATION RESULTS")
-    print("="*60)
+    print("\n" + "="*70)
+    print("🎯 ENHANCED EVALUATION RESULTS (PHASE 1)")
+    print("="*70)
     print(f"ROUGE-1: {metrics['rouge1']:.4f} (±{metrics.get('rouge1_std', 0):.4f})")
     print(f"ROUGE-2: {metrics['rouge2']:.4f} (±{metrics.get('rouge2_std', 0):.4f})")
     print(f"ROUGE-L: {metrics['rougeL']:.4f} (±{metrics.get('rougeL_std', 0):.4f})")
-    print("\n📈 Format Compliance:")
+    
+    print(f"\n📏 LENGTH ANALYSIS (KEY IMPROVEMENT METRIC):")
+    print(f"Average Prediction Length: {avg_pred_length:.1f} words")
+    print(f"Average Reference Length: {avg_ref_length:.1f} words")
+    print(f"Length Ratio (Pred/Ref): {metrics['length_ratio']:.2f}")
+    print(f"Target Achievement (≥75 words): {'✅ YES' if metrics['length_analysis']['length_target_achievement'] else '❌ NO'}")
+    print(f"Predictions ≥75 words: {metrics['length_analysis']['predictions_over_75_words']}/{len(valid_pairs)} ({100*metrics['length_analysis']['predictions_over_75_words']/len(valid_pairs):.1f}%)")
+    print(f"Predictions <50 words: {metrics['length_analysis']['predictions_under_50_words']}/{len(valid_pairs)} ({100*metrics['length_analysis']['predictions_under_50_words']/len(valid_pairs):.1f}%)")
+    print(f"Length Range: {metrics['length_analysis']['min_pred_length']} - {metrics['length_analysis']['max_pred_length']} words")
+    
+    print(f"\n📈 Format Compliance:")
     print(f"All lowercase: {'✅' if metrics['format_compliance']['all_lowercase'] else '❌'}")
     print(f"No punctuation: {'✅' if metrics['format_compliance']['no_punctuation'] else '❌'}")
     print(f"Min word count: {metrics['format_compliance']['min_word_count']}")
     print(f"Empty predictions: {metrics['format_compliance']['empty_predictions']}")
-    print("\n📈 Statistics:")
+    
+    print(f"\n📈 Statistics:")
     print(f"Samples Evaluated: {metrics['num_samples']}")
-    print(f"Avg Prediction Length: {metrics['avg_pred_length']:.1f} words")
-    print(f"Avg Reference Length: {metrics['avg_ref_length']:.1f} words")
 
-    results_file = Path('./experiments/detailed_evaluation_results.json')
+    results_file = Path('./experiments/enhanced_evaluation_results.json')
     results_file.parent.mkdir(exist_ok=True)
     detailed_results = {
         'metrics': metrics,
+        'phase_1_enhancements': {
+            'generation_config': {
+                'max_length': 400,
+                'min_length': 60,
+                'num_beams': 6,
+                'length_penalty': 1.4,
+                'early_stopping': False
+            },
+            'target_length_achieved': metrics['length_analysis']['length_target_achievement'],
+            'length_improvement_vs_baseline': f"Target: >75 words, Achieved: {avg_pred_length:.1f} words"
+        },
         'sample_predictions': [
             {
                 'id': valid_ids[i],
                 'prediction': valid_predictions[i],
                 'reference': valid_references[i],
+                'pred_length': valid_pred_lengths[i],
+                'ref_length': valid_ref_lengths[i],
                 'rouge1': compute_rouge_scores([valid_predictions[i]], [valid_references[i]])['rouge1'],
                 'rougeL': compute_rouge_scores([valid_predictions[i]], [valid_references[i]])['rougeL']
             }
@@ -204,12 +261,13 @@ def evaluate_model(model_path=None, val_path=None):
         'format_verification': {
             'normalization_applied': True,
             'single_task_focus': True,
-            'consistent_with_inference': True
+            'consistent_with_inference': True,
+            'phase_1_enhanced': True
         }
     }
     with open(results_file, 'w') as f:
         json.dump(detailed_results, f, indent=2, default=str)
-    print(f"💾 Results saved to: {results_file}")
+    print(f"💾 Enhanced results saved to: {results_file}")
 
     return metrics
 
@@ -227,18 +285,20 @@ def normalize_for_evaluation(text):
 
 if __name__ == '__main__':
     try:
-        print("🚀 Starting Model Evaluation...")
-        print("=" * 60)
-        print("🔧 PRIORITY FIXES APPLIED:")
-        print("✅ Removed multitask learning")
-        print("✅ Simplified evaluation for summaries")
-        print("✅ Consistent normalization")
-        print("✅ Proper ID mapping")
-        print("=" * 60)
+        print("🚀 Starting Enhanced Model Evaluation (Phase 1)...")
+        print("=" * 70)
+        print("🔧 PHASE 1 EVALUATION ENHANCEMENTS:")
+        print("✅ Enhanced generation parameters for longer outputs")
+        print("✅ Length-focused evaluation metrics")
+        print("✅ Target: Average prediction length ≥75 words")
+        print("=" * 70)
         metrics = evaluate_model()
         if metrics:
-            print(f"\n📊 Final ROUGE-L: {metrics['rougeL']:.4f}")
+            print(f"\n📊 Final Results:")
+            print(f"ROUGE-L: {metrics['rougeL']:.4f}")
+            print(f"Average Length: {metrics['avg_pred_length']:.1f} words")
+            print(f"Length Target: {'✅ ACHIEVED' if metrics['length_analysis']['length_target_achievement'] else '❌ NOT ACHIEVED'}")
         else:
             print("❌ Evaluation failed: No metrics returned")
     except Exception as e:
-        print(f"❌ Evaluation failed: {e}")
+        print(f"❌ Enhanced evaluation failed: {e}")

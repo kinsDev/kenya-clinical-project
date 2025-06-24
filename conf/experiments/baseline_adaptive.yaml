@@ -1,0 +1,39 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+# Aggressive ReduceLROnPlateau for testing
+scheduler:
+  patience: 2          # Quick adaptation
+  factor: 0.4          # More aggressive reduction
+  threshold: 0.002     # Higher threshold for quicker triggers
+  min_lr: 1e-6         # Higher minimum for safety
+
+vignette_training:
+  epochs: 12
+  batch_size: 4
+  eval_batch_size: 4
+  gradient_accumulation_steps: 2
+  learning_rate: 2e-4  # Same as baseline for comparison
+  warmup_steps: 30
+  weight_decay: 0.01
+  eval_steps: 15       # More frequent evaluation for scheduler
+  save_steps: 30
+  early_stopping_patience: 6
+  label_smoothing_factor: 0.1
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: false
+
+generation:
+  max_length: 256
+  num_beams: 2
+
+paths:
+  output_dir: ./experiments/baseline_adaptive
+  logs_dir: ./experiments/baseline_adaptive/logs

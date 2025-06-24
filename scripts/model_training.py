@@ -1,18 +1,55 @@
 import os
 import torch
-from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback
+from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback, TrainerCallback
 from datasets import load_from_disk
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import json
 from pathlib import Path
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+class ReduceLROnPlateauCallback(TrainerCallback):
+    def __init__(self, trainer, config):
+        self.trainer = trainer
+        self.config = config
+        self.scheduler = None
+        
+        # Check if scheduler config exists (now without experiments prefix)
+        if hasattr(self.config, 'scheduler'):
+            print("✅ Found scheduler configuration")
+            print(f"Scheduler settings: {OmegaConf.to_container(self.config.scheduler)}")
+        else:
+            print("⚠️ No scheduler configuration found, using defaults")
+        
+    def on_train_begin(self, args, state, control, **kwargs):
+        if self.scheduler is None and hasattr(self.config, 'scheduler'):
+            print("🔧 Initializing ReduceLROnPlateau scheduler...")
+            self.scheduler = ReduceLROnPlateau(
+                self.trainer.optimizer,
+                mode='min',
+                factor=self.config.scheduler.factor,
+                patience=self.config.scheduler.patience,
+                threshold=self.config.scheduler.threshold,
+                min_lr=self.config.scheduler.min_lr,
+                verbose=True
+            )
+            print("✅ ReduceLROnPlateau scheduler initialized")
+        
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        if self.scheduler is not None and metrics is not None and 'eval_loss' in metrics:
+            old_lr = self.trainer.optimizer.param_groups[0]['lr']
+            self.scheduler.step(metrics['eval_loss'])
+            new_lr = self.trainer.optimizer.param_groups[0]['lr']
+            if old_lr != new_lr:
+                print(f"📉 Learning rate reduced: {old_lr:.2e} → {new_lr:.2e}")
 
 class MedicalT5Trainer:
     def __init__(self, config: DictConfig):
         self.config = config
         self.validate_config()
-        self.model_name = self.config.experiments.model.name
-        self.output_dir = self.config.experiments.paths.output_dir
+        # Fixed: Remove experiments prefix since we're loading config directly
+        self.model_name = self.config.model.name
+        self.output_dir = self.config.paths.output_dir
         try:
             self.tokenizer = T5Tokenizer.from_pretrained(self.model_name)
         except Exception as e:
@@ -21,22 +58,22 @@ class MedicalT5Trainer:
         self.model = None
 
     def validate_config(self):
-        """Validate configuration to ensure required keys exist"""
+        """Validate configuration to ensure required keys exist - Updated for direct config loading"""
         required_keys = [
-            ('experiments.model.name', 'Model name (e.g., t5-small)'),
-            ('experiments.paths.output_dir', 'Output directory path'),
-            ('experiments.vignette_training.epochs', 'Number of training epochs'),
-            ('experiments.vignette_training.batch_size', 'Training batch size'),
-            ('experiments.vignette_training.eval_batch_size', 'Evaluation batch size'),
-            ('experiments.vignette_training.gradient_accumulation_steps', 'Gradient accumulation steps'),
-            ('experiments.vignette_training.warmup_steps', 'Warmup steps'),
-            ('experiments.vignette_training.weight_decay', 'Weight decay'),
-            ('experiments.vignette_training.learning_rate', 'Learning rate'),
-            ('experiments.vignette_training.eval_steps', 'Evaluation steps'),
-            ('experiments.vignette_training.save_steps', 'Save steps'),
-            ('experiments.vignette_training.early_stopping_patience', 'Early stopping patience'),
-            ('experiments.vignette_training.label_smoothing_factor', 'Label smoothing factor'),
-            ('experiments.paths.logs_dir', 'Logging directory')
+            ('model.name', 'Model name (e.g., t5-small)'),
+            ('paths.output_dir', 'Output directory path'),
+            ('vignette_training.epochs', 'Number of training epochs'),
+            ('vignette_training.batch_size', 'Training batch size'),
+            ('vignette_training.eval_batch_size', 'Evaluation batch size'),
+            ('vignette_training.gradient_accumulation_steps', 'Gradient accumulation steps'),
+            ('vignette_training.warmup_steps', 'Warmup steps'),
+            ('vignette_training.weight_decay', 'Weight decay'),
+            ('vignette_training.learning_rate', 'Learning rate'),
+            ('vignette_training.eval_steps', 'Evaluation steps'),
+            ('vignette_training.save_steps', 'Save steps'),
+            ('vignette_training.early_stopping_patience', 'Early stopping patience'),
+            ('vignette_training.label_smoothing_factor', 'Label smoothing factor'),
+            ('paths.logs_dir', 'Logging directory')
         ]
         
         print("🔍 Validating configuration structure...")
@@ -75,7 +112,7 @@ class MedicalT5Trainer:
         """Train the model on vignettes"""
         print("🚀 Starting training...")
         if epochs is None:
-            epochs = self.config.experiments.vignette_training.epochs
+            epochs = self.config.vignette_training.epochs
 
         try:
             train_dataset = load_from_disk('outputs/train_dataset')
@@ -96,21 +133,22 @@ class MedicalT5Trainer:
 
         self.load_model()
 
+        # Fixed: Remove experiments prefix from all config access
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
             num_train_epochs=epochs,
-            per_device_train_batch_size=self.config.experiments.vignette_training.batch_size,
-            per_device_eval_batch_size=self.config.experiments.vignette_training.eval_batch_size,
-            gradient_accumulation_steps=self.config.experiments.vignette_training.gradient_accumulation_steps,
-            warmup_steps=self.config.experiments.vignette_training.warmup_steps,
-            weight_decay=self.config.experiments.vignette_training.weight_decay,
-            learning_rate=self.config.experiments.vignette_training.learning_rate,
-            logging_dir=f"{self.config.experiments.paths.logs_dir}/training",
+            per_device_train_batch_size=self.config.vignette_training.batch_size,
+            per_device_eval_batch_size=self.config.vignette_training.eval_batch_size,
+            gradient_accumulation_steps=self.config.vignette_training.gradient_accumulation_steps,
+            warmup_steps=self.config.vignette_training.warmup_steps,
+            weight_decay=self.config.vignette_training.weight_decay,
+            learning_rate=self.config.vignette_training.learning_rate,
+            logging_dir=f"{self.config.paths.logs_dir}/training",
             logging_steps=5,
             eval_strategy="steps",
-            eval_steps=self.config.experiments.vignette_training.eval_steps,
+            eval_steps=self.config.vignette_training.eval_steps,
             save_strategy="steps",
-            save_steps=self.config.experiments.vignette_training.save_steps,
+            save_steps=self.config.vignette_training.save_steps,
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
@@ -118,8 +156,7 @@ class MedicalT5Trainer:
             dataloader_pin_memory=False,
             save_total_limit=3,
             report_to=[],
-            label_smoothing_factor=self.config.experiments.vignette_training.label_smoothing_factor,
-            lr_scheduler_type="cosine",
+            label_smoothing_factor=self.config.vignette_training.label_smoothing_factor,
             warmup_ratio=0.1,
             max_grad_norm=1.0,
             gradient_checkpointing=True,
@@ -138,8 +175,12 @@ class MedicalT5Trainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.experiments.vignette_training.early_stopping_patience)]
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
         )
+
+        # Add the custom scheduler callback
+        reduce_lr_callback = ReduceLROnPlateauCallback(trainer, self.config)
+        trainer.add_callback(reduce_lr_callback)
 
         print("Starting training...")
         try:
@@ -174,19 +215,18 @@ class MedicalT5Trainer:
         except Exception as e:
             print(f"⚠️ Failed to save metrics: {e}")
 
-@hydra.main(version_base=None, config_path="../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf/experiments", config_name="baseline_v2")
 def main(cfg: DictConfig):
-    print("🔧 HYDRA CONFIGURATION DEBUG")
+    print("🔧 EXPERIMENTATION 1: ReduceLROnPlateau SCHEDULER")
     print("=" * 50)
-    print("✅ MAIN FUNCTION STARTED - LOGGING SHOULD WORK NOW")
+    print("✅ MAIN FUNCTION STARTED")
     print("Current working directory:", os.getcwd())
-    print("Config path resolved to:", hydra.core.config_store.ConfigStore.instance().repo)
     print("=" * 50)
     
     print("Loaded configuration:")
     print(OmegaConf.to_yaml(cfg))
     print("=" * 60)
-    print("PRIORITY FIXES: ENHANCED TRAINING PIPELINE")
+    print("NEW FEATURES: ReduceLROnPlateau SCHEDULER")
     print("=" * 60)
     
     if torch.cuda.is_available():
@@ -209,8 +249,8 @@ def main(cfg: DictConfig):
         print("✅ Consistent tokenizer handling")
         print("✅ Added validation")
         print("✅ Enhanced config validation")
-        print("✅ Disabled struct mode for dynamic config access")
-        print("✅ Fixed config path access with experiments prefix")
+        print("✅ Fixed config path access - removed experiments prefix")
+        print("✅ Updated for direct config loading")
         print("=" * 40)
         trainer.train()
         print("\n" + "=" * 60)

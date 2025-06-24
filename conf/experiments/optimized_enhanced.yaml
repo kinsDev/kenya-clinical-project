@@ -1,0 +1,46 @@
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-small
+
+# Enhanced scheduler based on optimized_adaptive learnings
+scheduler:
+  patience: 4          # More patience than optimized_adaptive (3)
+  factor: 0.6          # Less aggressive than optimized_adaptive (0.5)
+  threshold: 0.0005    # More sensitive than optimized_adaptive (0.0008)
+  min_lr: 1e-8         # Higher than optimized_adaptive (2e-8) for stability
+
+vignette_training:
+  epochs: 16           # Increased from optimized_v2 (14) for deeper learning
+  batch_size: 3        # Keep optimized_adaptive's successful setting
+  eval_batch_size: 6   # Keep optimized_adaptive's successful setting
+  gradient_accumulation_steps: 3  # Keep optimized_adaptive's successful setting
+  learning_rate: 1.6e-4  # Between optimized_v2 (1.5e-4) and optimized_adaptive (1.8e-4)
+  warmup_steps: 80     # Increased from optimized_adaptive (75)
+  weight_decay: 0.014  # Between optimized_v2 (0.015) and optimized_adaptive (0.012)
+  eval_steps: 16       # More frequent than optimized_adaptive (18)
+  save_steps: 32       # More frequent saving
+  early_stopping_patience: 8  # More patience than optimized_adaptive (7)
+  label_smoothing_factor: 0.12  # Slightly higher than optimized_adaptive (0.11)
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+
+# Enhanced generation for longer outputs
+generation:
+  max_length: 320      # Increased from 256 to help with length
+  min_length: 70       # NEW: Force minimum length
+  num_beams: 5         # Between optimized_adaptive (4) and quality (6)
+  early_stopping: false  # Disable to allow fuller generation
+  do_sample: false
+  repetition_penalty: 1.12  # Slightly lower than optimized_adaptive (1.15)
+  length_penalty: 1.3   # Higher than optimized_adaptive (1.1) for length
+  no_repeat_ngram_size: 2  # NEW: Allow some medical repetition
+
+paths:
+  output_dir: ./experiments/optimized_enhanced
+  logs_dir: ./experiments/optimized_enhanced/logs

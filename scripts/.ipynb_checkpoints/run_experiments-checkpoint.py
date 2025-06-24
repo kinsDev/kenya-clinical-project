@@ -37,7 +37,8 @@ class ExperimentRunner:
         try:
             cmd = [
                 'python', 'scripts/model_training.py',
-                f'--config-name=experiments/{config_name}',
+                f'--config-path=../conf/experiments',
+                f'--config-name={config_name}',
                 f'hydra.run.dir={exp_dir}/hydra_outputs'
             ]
             print(f"🔧 Running: {' '.join(cmd)}")
@@ -68,7 +69,8 @@ class ExperimentRunner:
                 'config_name': config_name,
                 'output_dir': str(exp_dir),
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'priority_fixes_applied': True,
+                'scheduler_type': 'ReduceLROnPlateau',  # NEW: Track scheduler type
+                'experimentation': 1,  # NEW: Track experimentation phase
                 'eval_stderr': eval_result.stderr[-500:] if eval_result.returncode != 0 else ''
             }
 
@@ -83,7 +85,8 @@ class ExperimentRunner:
                 'training_time': time.time() - start_time,
                 'config_name': config_name,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'priority_fixes_applied': True
+                'scheduler_type': 'ReduceLROnPlateau',
+                'experimentation': 1
             }
             print(f"❌ {experiment_name} FAILED! ({experiment_result['training_time']:.1f}s)")
             print(f"Error: {e.stderr[-500:]}")
@@ -94,7 +97,8 @@ class ExperimentRunner:
                 'error': str(e),
                 'config_name': config_name,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'priority_fixes_applied': True
+                'scheduler_type': 'ReduceLROnPlateau',
+                'experimentation': 1
             }
             print(f"💥 Exception in {experiment_name}: {e}")
 
@@ -146,7 +150,8 @@ class ExperimentRunner:
                 try:
                     result = future.result()
                     status_emoji = "✅" if result['status'] == 'success' else "❌"
-                    print(f"\n{status_emoji} [{completed}/{len(experiments)}] {exp_name}: {result['status']}")
+                    scheduler_info = f" [ReduceLROnPlateau]" if result.get('scheduler_type') == 'ReduceLROnPlateau' else ""
+                    print(f"\n{status_emoji} [{completed}/{len(experiments)}] {exp_name}{scheduler_info}: {result['status']}")
                     if result.get('metrics'):
                         print(f"   📊 ROUGE-L: {result['metrics'].get('rougeL', 0):.4f}")
                     else:
@@ -158,25 +163,32 @@ class ExperimentRunner:
         print(f"\n🏁 Batch {batch_name} completed in {batch_time:.1f}s")
         return self.results
 
+# Updated experiment batches with new adaptive configs
 EXPERIMENT_BATCHES = {
     1: [
         ("baseline", "baseline"),
-        ("fast", "fast")
-    ],
-    2: [
-        ("aggressive", "aggressive"),
-        ("data_augmented", "data_augmented")
-    ],
-    3: [
-        ("balanced", "balanced"),
         ("quality", "quality")
     ],
-    4: [
+    2: [
         ("enhanced", "enhanced"),
         ("optimized", "optimized")
+    ],
+    3: [
+        ("baseline_v2", "baseline_v2"),
+        ("optimized_v2", "optimized_v2")
+    ],
+    4: [
+        ("optimized_adaptive", "optimized_adaptive"),          
+        ("baseline_adaptive", "baseline_adaptive")      
+    ],
+    5: [
+        ("optimized_enhanced", "optimized_enhanced"),          
+        ("baseline_enhanced", "baseline_enhanced") 
+    ],
+    6: [
+        ("length_optimized", "length_optimized")
     ]
 }
-
 
 def run_batch_experiments(batch_number=1):
     if batch_number not in EXPERIMENT_BATCHES:
@@ -185,14 +197,17 @@ def run_batch_experiments(batch_number=1):
         return
 
     experiments = EXPERIMENT_BATCHES[batch_number]
-    print("🎯 ENHANCED PARALLEL EXPERIMENT RUNNER")
+    print("🎯 EXPERIMENTATION 1: ReduceLROnPlateau SCHEDULER")
     print("=" * 70)
-    print("🔧 PRIORITY FIXES INCLUDED:")
-    print("✅ Simplified preprocessing")
-    print("✅ Single-task training")
-    print("✅ Consistent evaluation")
-    print("✅ Optimized inference")
-    print("✅ Enhanced config validation")
+    print("🔧 NEW FEATURES IN THIS EXPERIMENTATION:")
+    print("✅ ReduceLROnPlateau adaptive learning rate scheduler")
+    print("✅ Configurable patience, factor, and threshold parameters")
+    print("✅ Enhanced monitoring and logging of LR changes")
+    print("✅ Maintains all existing optimizations")
+    print("✅ New adaptive configurations for testing")
+    print("✅ Fixed config path references for proper Hydra loading")
+    if batch_number >= 3:
+        print("🆕 RUNNING EXPERIMENTATION 1 CONFIGS!")
     print("=" * 70)
 
     runner = ExperimentRunner(max_parallel=2)
@@ -207,6 +222,8 @@ def run_batch_experiments(batch_number=1):
                 print(f"📁 Model Location: {best_result['output_dir']}/final_model")
                 print(f"⚙️ Config Used: conf/experiments/{best_result['config_name']}.yaml")
                 print(f"⏱️ Training Time: {best_result['total_time']/60:.1f} minutes")
+                print(f"🔧 Scheduler: {best_result.get('scheduler_type', 'Unknown')}")
+                print(f"🧪 Experimentation: {best_result.get('experimentation', 'N/A')}")
             else:
                 print(f"⚠️ No metrics available for winner {best_exp_name}")
         except Exception as e:
@@ -215,5 +232,5 @@ def run_batch_experiments(batch_number=1):
 
 if __name__ == "__main__":
     import sys
-    batch_number = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    batch_number = int(sys.argv[1]) if len(sys.argv) > 1 else 4  # Default to new adaptive batch
     results = run_batch_experiments(batch_number)

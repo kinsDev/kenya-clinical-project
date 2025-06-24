@@ -7,6 +7,7 @@ import os
 import torch
 from typing import List, Dict
 import random
+from parrot import Parrot
 
 def load_and_normalize_data(train_path, test_path):
     """Load and normalize data with simplified prompt format"""
@@ -33,7 +34,11 @@ def apply_synonym_replacement(text: str) -> str:
         'presents': ['shows', 'exhibits'],
         'symptoms': ['signs', 'manifestations'],
         'condition': ['state', 'situation'],
-        'treatment': ['care', 'management']
+        'treatment': ['care', 'management'],
+        'diagnosis': ['assessment', 'evaluation', 'identification'],
+        'medication': ['drug', 'medicine', 'prescription'],
+        'hospital': ['clinic', 'facility', 'medical center'],
+        'doctor': ['physician', 'medic', 'practitioner']
     }
 
     words = text.split()
@@ -53,20 +58,40 @@ def apply_noise_injection(text: str) -> str:
         words[idx], words[idx + 1] = words[idx + 1], words[idx]
     return ' '.join(words)
 
-def augment_dataset(dataset, augmentation_factor=1):
-    augmentation_factor = dataset[0].get('config', {}).get('data', {}).get('augmentation', {}).get('augmentation_factor', augmentation_factor)
-    """Apply basic augmentation: synonym replacement and noise injection"""
-    print(f"🔄 Applying basic augmentation with factor {augmentation_factor}...")
+def paraphrase_text(text: str, num_paraphrases=1):
+    """Generate paraphrases using Parrot with optimization"""
+    try:
+        with torch.no_grad():  # Reduce memory usage
+            parrot = Parrot(model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=torch.cuda.is_available())
+            para_phrases = parrot.augment(input_phrase=text, use_gpu=torch.cuda.is_available(), do_diverse=True, max_return_phrases=num_paraphrases)
+            if para_phrases:
+                return [p[0] for p in para_phrases]
+            else:
+                return [text]
+    except Exception as e:
+        print(f"⚠️ Paraphrasing failed for text: {text[:50]}... Error: {e}")
+        return [text]
 
+def augment_dataset(dataset, augmentation_factor=2):
+    """Apply augmentation: synonym replacement, noise injection, and selective paraphrasing"""
+    print(f"🔄 Applying enhanced augmentation with factor {augmentation_factor}...")
     original_data = [example for example in dataset]
-    augmented_data = []
+    for example in original_data:
+        example['augmentation_type'] = 'original'
 
+    augmented_data = []
     for example in original_data:
         for _ in range(augmentation_factor):
             augmented_prompt = apply_synonym_replacement(example['Prompt'])
             augmented_prompt = apply_noise_injection(augmented_prompt)
+            # Apply paraphrasing to 50% of cases to reduce load
+            if random.random() < 0.5:
+                paraphrased_prompts = paraphrase_text(augmented_prompt, num_paraphrases=1)
+                if paraphrased_prompts:
+                    augmented_prompt = paraphrased_prompts[0]
             augmented_example = example.copy()
             augmented_example['Prompt'] = augmented_prompt
+            augmented_example['augmentation_type'] = 'augmented'
             augmented_data.append(augmented_example)
 
     combined_data = original_data + augmented_data
@@ -132,17 +157,18 @@ if __name__ == "__main__":
     print("✅ Removed multitask learning components")
     print("✅ Simplified prompt format")
     print("✅ Removed few-shot examples")
-    print("✅ Implemented basic augmentation (synonym replacement and noise injection)")
+    print("✅ Implemented enhanced augmentation (synonym replacement, noise injection, paraphrasing)")
     print("✅ Consistent tokenizer handling with default t5-small")
+    print("✅ Fixed augmentation_factor parameter access")
     print("=" * 60)
 
     # Load and normalize data
     print("\n📊 Loading and normalizing data with simplified format...")
     train_dataset, test_dataset = load_and_normalize_data(train_path, test_path)
 
-    # Apply basic augmentation
-    print("\n🔄 Applying basic augmentation (1x)...")
-    train_dataset = augment_dataset(train_dataset, augmentation_factor=1)
+    # Apply enhanced augmentation
+    print("\n🔄 Applying enhanced augmentation (2x)...")
+    train_dataset = augment_dataset(train_dataset, augmentation_factor=2)
 
     # Tokenize datasets with default tokenizer
     print("\n🔤 Tokenizing datasets with default t5-small tokenizer...")
@@ -157,15 +183,15 @@ if __name__ == "__main__":
     os.makedirs('outputs', exist_ok=True)
 
     # Save datasets
-    print("\n💾 Saving simplified datasets...")
+    print("\n💾 Saving enhanced datasets...")
     train_dataset.save_to_disk('outputs/train_dataset')
     val_dataset.save_to_disk('outputs/val_dataset')
     test_dataset.save_to_disk('outputs/test_dataset')
 
-    print("\n✅ PRIORITY PREPROCESSING COMPLETED!")
+    print("\n✅ ENHANCED PREPROCESSING COMPLETED!")
     print("=" * 60)
     print(f"📊 Final dataset sizes:")
-    print(f"   Train: {len(train_dataset)} (with basic augmentation)")
+    print(f"   Train: {len(train_dataset)} (with enhanced augmentation)")
     print(f"   Validation: {len(val_dataset)}")
     print(f"   Test: {len(test_dataset)}")
 
