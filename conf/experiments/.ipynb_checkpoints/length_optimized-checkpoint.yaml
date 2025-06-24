@@ -20,7 +20,7 @@ vignette_training:
   warmup_steps: 80
   weight_decay: 0.014
   eval_steps: 20       # Increased from 16
-  save_steps: 32
+  save_steps: 40       # Updated from 32 to be a multiple of eval_steps (20 * 2)
   early_stopping_patience: 8
   label_smoothing_factor: 0.12
 
@@ -40,5 +40,5 @@ generation:
   no_repeat_ngram_size: 2
 
 paths:
-  output_dir: ./experiments/optimized_enhanced
-  logs_dir: ./experiments/optimized_enhanced/logs
+  output_dir: ./experiments/length_optimized
+  logs_dir: ./experiments/length_optimized/logs

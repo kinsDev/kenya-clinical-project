@@ -7,7 +7,7 @@ import os
 import torch
 from typing import List, Dict
 import random
-from parrot import Parrot
+# from parrot import Parrot
 
 def load_and_normalize_data(train_path, test_path):
     """Load and normalize data with simplified prompt format"""
@@ -58,22 +58,22 @@ def apply_noise_injection(text: str) -> str:
         words[idx], words[idx + 1] = words[idx + 1], words[idx]
     return ' '.join(words)
 
-def paraphrase_text(text: str, num_paraphrases=1):
-    """Generate paraphrases using Parrot with optimization"""
-    try:
-        with torch.no_grad():  # Reduce memory usage
-            parrot = Parrot(model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=torch.cuda.is_available())
-            para_phrases = parrot.augment(input_phrase=text, use_gpu=torch.cuda.is_available(), do_diverse=True, max_return_phrases=num_paraphrases)
-            if para_phrases:
-                return [p[0] for p in para_phrases]
-            else:
-                return [text]
-    except Exception as e:
-        print(f"⚠️ Paraphrasing failed for text: {text[:50]}... Error: {e}")
-        return [text]
+# def paraphrase_text(text: str, num_paraphrases=1):  # Commented out for now
+#     """Generate paraphrases using Parrot with optimization"""
+#     try:
+#         with torch.no_grad():  # Reduce memory usage
+#             parrot = Parrot(model_tag="prithivida/parrot_paraphraser_on_T5", use_gpu=torch.cuda.is_available())
+#             para_phrases = parrot.augment(input_phrase=text, use_gpu=torch.cuda.is_available(), do_diverse=True, max_return_phrases=num_paraphrases)
+#             if para_phrases:
+#                 return [p[0] for p in para_phrases]
+#             else:
+#                 return [text]
+#     except Exception as e:
+#         print(f"⚠️ Paraphrasing failed for text: {text[:50]}... Error: {e}")
+#         return [text]
 
 def augment_dataset(dataset, augmentation_factor=2):
-    """Apply augmentation: synonym replacement, noise injection, and selective paraphrasing"""
+    """Apply augmentation: synonym replacement and noise injection"""
     print(f"🔄 Applying enhanced augmentation with factor {augmentation_factor}...")
     original_data = [example for example in dataset]
     for example in original_data:
@@ -84,11 +84,7 @@ def augment_dataset(dataset, augmentation_factor=2):
         for _ in range(augmentation_factor):
             augmented_prompt = apply_synonym_replacement(example['Prompt'])
             augmented_prompt = apply_noise_injection(augmented_prompt)
-            # Apply paraphrasing to 50% of cases to reduce load
-            if random.random() < 0.5:
-                paraphrased_prompts = paraphrase_text(augmented_prompt, num_paraphrases=1)
-                if paraphrased_prompts:
-                    augmented_prompt = paraphrased_prompts[0]
+            # Removed paraphrasing logic
             augmented_example = example.copy()
             augmented_example['Prompt'] = augmented_prompt
             augmented_example['augmentation_type'] = 'augmented'
@@ -157,7 +153,7 @@ if __name__ == "__main__":
     print("✅ Removed multitask learning components")
     print("✅ Simplified prompt format")
     print("✅ Removed few-shot examples")
-    print("✅ Implemented enhanced augmentation (synonym replacement, noise injection, paraphrasing)")
+    print("✅ Implemented enhanced augmentation (synonym replacement, noise injection)")  # Updated to reflect no paraphrasing
     print("✅ Consistent tokenizer handling with default t5-small")
     print("✅ Fixed augmentation_factor parameter access")
     print("=" * 60)
