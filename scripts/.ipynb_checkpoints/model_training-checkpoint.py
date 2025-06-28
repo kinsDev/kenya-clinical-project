@@ -1,11 +1,17 @@
 import os
 import torch
-from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback, TrainerCallback, Adafactor
+from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback
 from datasets import load_from_disk
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import json
 from pathlib import Path
+import logging
+from transformers.optimization import Adafactor
+
+# Set up logging
+logging.basicConfig(filename='outputs/training_debug.txt', level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MedicalT5Trainer:
     def __init__(self, config: DictConfig):
@@ -15,14 +21,16 @@ class MedicalT5Trainer:
         self.output_dir = self.config.paths.output_dir
         try:
             self.tokenizer = T5Tokenizer.from_pretrained(self.model_name)
+            logging.info(f"Tokenizer loaded: {self.model_name}")
         except Exception as e:
             print(f"❌ Failed to load tokenizer for {self.model_name}: {e}")
+            logging.error(f"Failed to load tokenizer for {self.model_name}: {e}")
             raise
         self.model = None
 
     def validate_config(self):
         required_keys = [
-            ('model.name', 'Model name (e.g., t5-small)'),
+            ('model.name', 'Model name (e.g., t5-base)'),
             ('paths.output_dir', 'Output directory path'),
             ('vignette_training.epochs', 'Number of training epochs'),
             ('vignette_training.batch_size', 'Training batch size'),
@@ -44,9 +52,11 @@ class MedicalT5Trainer:
             if value is None:
                 print(f"❌ Missing config key: {key} ({desc})")
                 print(f"Config structure:\n{OmegaConf.to_yaml(self.config)}")
+                logging.error(f"Missing config key: {key} ({desc})")
                 raise ValueError(f"Missing configuration key: {key}")
             print(f"✅ Found {key}: {value}")
         print("✅ Configuration validated successfully")
+        logging.info("Configuration validated successfully")
 
     def load_model(self):
         try:
@@ -56,35 +66,119 @@ class MedicalT5Trainer:
                 self.model.resize_token_embeddings(len(self.tokenizer))
             print(f"✅ Model loaded: {self.model_name}")
             print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+            if torch.cuda.is_available():
+                print(f"GPU Memory Used: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                logging.info(f"GPU Memory Used: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
             return self.model
         except Exception as e:
             print(f"❌ Failed to load model: {e}")
+            logging.error(f"Failed to load model: {e}")
             raise
 
     def train(self, epochs=None):
         print("🚀 Starting training...")
+        logging.info("Starting training...")
         if epochs is None:
             epochs = self.config.vignette_training.epochs
-
+    
         try:
             train_dataset = load_from_disk('outputs/train_dataset')
             val_dataset = load_from_disk('outputs/val_dataset')
             print(f"✅ Loaded datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+            logging.info(f"Loaded datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
         except Exception as e:
             print(f"❌ Failed to load datasets: {e}")
+            logging.error(f"Failed to load datasets: {e}")
             raise
-
+    
+        # Validate dataset format
         if not train_dataset or not val_dataset:
             print("❌ Datasets are empty!")
+            logging.error("Datasets are empty!")
             raise ValueError("Empty datasets detected")
-
-        sample = train_dataset[0]
-        if 'labels' not in sample:
-            print("❌ Dataset missing 'labels' column")
-            raise ValueError("Invalid dataset format")
-
+        
+        # Log sample data for debugging
+        print("🔍 Inspecting dataset samples...")
+        logging.info("Inspecting dataset samples...")
+        for dataset_name, dataset in [('train', train_dataset), ('val', val_dataset)]:
+            print(f"{dataset_name.capitalize()} dataset columns: {dataset.column_names}")
+            logging.info(f"{dataset_name.capitalize()} dataset columns: {dataset.column_names}")
+            if 'Prompt' not in dataset.column_names or 'labels' not in dataset.column_names:
+                print(f"❌ {dataset_name.capitalize()} dataset missing required columns: {dataset.column_names}")
+                logging.error(f"{dataset_name.capitalize()} dataset missing required columns: {dataset.column_names}")
+                raise ValueError(f"{dataset_name.capitalize()} dataset must contain 'Prompt' and 'labels' columns")
+            for i in range(min(3, len(dataset))):
+                sample = dataset[i]
+                print(f"Sample {i} from {dataset_name}:")
+                print(f"  Prompt: {sample.get('Prompt', 'N/A')[:50]}...")
+                print(f"  Labels: {sample.get('labels', 'N/A')[:50]}...")
+                print(f"  All keys: {list(sample.keys())}")
+                logging.info(f"Sample {i} from {dataset_name}: Prompt={sample.get('Prompt', 'N/A')[:50]}..., Labels={sample.get('labels', 'N/A')[:50]}..., Keys={list(sample.keys())}")
+        
+        # Filter invalid samples
+        def filter_valid(example):
+            return (
+                'Prompt' in example and isinstance(example['Prompt'], str) and example['Prompt'].strip() and
+                'labels' in example and isinstance(example['labels'], str) and example['labels'].strip()
+            )
+        original_train_size = len(train_dataset)
+        original_val_size = len(val_dataset)
+        train_dataset = train_dataset.filter(filter_valid, num_proc=1)
+        val_dataset = val_dataset.filter(filter_valid, num_proc=1)
+        print(f"✅ After filtering - Train: {len(train_dataset)} (from {original_train_size}), Val: {len(val_dataset)} (from {original_val_size})")
+        logging.info(f"After filtering - Train: {len(train_dataset)} (from {original_train_size}), Val: {len(val_dataset)} (from {original_val_size})")
+        if len(train_dataset) == 0 or len(val_dataset) == 0:
+            raise ValueError("No valid samples after filtering")
+    
         self.load_model()
-
+    
+        # Debug batch creation
+        def custom_collate(batch):
+            print(f"Debug: Processing batch of size {len(batch)}")
+            logging.info(f"Processing batch of size {len(batch)}")
+            if not batch:
+                print("❌ Empty batch detected!")
+                logging.error("Empty batch detected in custom_collate")
+                raise ValueError("DataLoader produced an empty batch")
+            valid_batch = []
+            for i, item in enumerate(batch):
+                if not isinstance(item, dict):
+                    print(f"❌ Batch item {i}: Not a dictionary: {type(item)}")
+                    logging.error(f"Batch item {i}: Not a dictionary: {type(item)}")
+                    continue
+                if 'Prompt' not in item or 'labels' not in item:
+                    print(f"❌ Batch item {i}: Missing required keys: {list(item.keys())}")
+                    logging.error(f"Batch item {i}: Missing required keys: {list(item.keys())}")
+                    continue
+                if not isinstance(item['Prompt'], str) or not item['Prompt'].strip():
+                    print(f"❌ Batch item {i}: Invalid Prompt: {item['Prompt']}")
+                    logging.error(f"Batch item {i}: Invalid Prompt: {item['Prompt']}")
+                    continue
+                if not isinstance(item['labels'], str) or not item['labels'].strip():
+                    print(f"❌ Batch item {i}: Invalid labels: {item['labels']}")
+                    logging.error(f"Batch item {i}: Invalid labels: {item['labels']}")
+                    continue
+                try:
+                    prompt_encoding = self.tokenizer(item['Prompt'], truncation=True, max_length=512)
+                    label_encoding = self.tokenizer(item['labels'], truncation=True, max_length=512)
+                    print(f"  Batch item {i}: Prompt={item['Prompt'][:50]}..., Labels={item['labels'][:50]}...")
+                    print(f"  Batch item {i}: Prompt tokens={len(prompt_encoding['input_ids'])}, Label tokens={len(label_encoding['input_ids'])}")
+                    logging.info(f"Batch item {i}: Prompt={item['Prompt'][:50]}..., Labels={item['labels'][:50]}..., Prompt tokens={len(prompt_encoding['input_ids'])}, Label tokens={len(label_encoding['input_ids'])}")
+                    if not prompt_encoding['input_ids'] or not label_encoding['input_ids']:
+                        print(f"❌ Batch item {i}: Empty encoding detected!")
+                        logging.error(f"Batch item {i}: Empty encoding detected!")
+                        continue
+                    valid_batch.append(item)
+                except Exception as e:
+                    print(f"❌ Batch item {i}: Tokenization failed: {e}")
+                    logging.error(f"Batch item {i}: Tokenization failed: {e}")
+                    continue
+            if not valid_batch:
+                print("❌ No valid items in batch after filtering!")
+                logging.error("No valid items in batch after filtering")
+                raise ValueError("No valid items in batch after filtering")
+            return data_collator(valid_batch)
+    
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
             num_train_epochs=epochs,
@@ -111,34 +205,37 @@ class MedicalT5Trainer:
             warmup_ratio=0.1,
             max_grad_norm=1.0,
             gradient_checkpointing=True,
+            dataloader_num_workers=0,
         )
-
+    
         optimizer = Adafactor(
             self.model.parameters(),
             lr=self.config.vignette_training.learning_rate,
             scale_parameter=True,
             weight_decay=self.config.vignette_training.weight_decay,
-            relative_step=False
+            relative_step=False,
+            warmup_init=False
         )
-
+    
         data_collator = DataCollatorForSeq2Seq(
             tokenizer=self.tokenizer,
             model=self.model,
             return_tensors="pt",
             padding=True
         )
-
+    
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
-            data_collator=data_collator,
+            data_collator=custom_collate,
             optimizers=(optimizer, None),
             callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
         )
-
+    
         print("Starting training...")
+        logging.info("Starting training with Trainer...")
         try:
             trainer.train()
             final_model_path = f"{self.output_dir}/final_model"
@@ -146,9 +243,11 @@ class MedicalT5Trainer:
             self.tokenizer.save_pretrained(final_model_path)
             self._save_training_metrics(trainer, "training")
             print(f"✅ Training completed! Model saved to: {final_model_path}")
+            logging.info(f"Training completed! Model saved to: {final_model_path}")
             return trainer
         except Exception as e:
             print(f"❌ Training failed: {e}")
+            logging.error(f"Training failed: {e}")
             raise
 
     def _save_training_metrics(self, trainer, phase_name):
@@ -167,8 +266,10 @@ class MedicalT5Trainer:
             with open(metrics_file, 'w') as f:
                 json.dump(metrics, f, indent=2, default=str)
             print(f"✅ Metrics saved to: {metrics_file}")
+            logging.info(f"Metrics saved to: {metrics_file}")
         except Exception as e:
             print(f"⚠️ Failed to save metrics: {e}")
+            logging.error(f"Failed to save metrics: {e}")
 
 @hydra.main(version_base=None, config_path="../conf/experiments", config_name="length_optimized")
 def main(cfg: DictConfig):
@@ -187,8 +288,10 @@ def main(cfg: DictConfig):
     if torch.cuda.is_available():
         print(f"CUDA available: {torch.cuda.get_device_name(0)}")
         print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        logging.info(f"CUDA available: {torch.cuda.get_device_name(0)}, Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     else:
         print("CUDA not available, using CPU")
+        logging.info("CUDA not available, using CPU")
 
     try:
         OmegaConf.set_struct(cfg, False)
@@ -215,6 +318,7 @@ def main(cfg: DictConfig):
         print(f"❌ Training failed: {e}")
         import traceback
         traceback.print_exc()
+        logging.error(f"Main function failed: {e}\n{traceback.format_exc()}")
         raise
 
 if __name__ == '__main__':

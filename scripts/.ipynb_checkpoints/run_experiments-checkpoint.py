@@ -69,8 +69,8 @@ class ExperimentRunner:
                 'config_name': config_name,
                 'output_dir': str(exp_dir),
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'scheduler_type': 'ReduceLROnPlateau',  # NEW: Track scheduler type
-                'experimentation': 1,  # NEW: Track experimentation phase
+                'optimizer': 'Adafactor',  # Updated to reflect Adafactor
+                'experimentation': 2,  # Track experimentation phase
                 'eval_stderr': eval_result.stderr[-500:] if eval_result.returncode != 0 else ''
             }
 
@@ -85,8 +85,8 @@ class ExperimentRunner:
                 'training_time': time.time() - start_time,
                 'config_name': config_name,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'scheduler_type': 'ReduceLROnPlateau',
-                'experimentation': 1
+                'optimizer': 'Adafactor',
+                'experimentation': 2
             }
             print(f"❌ {experiment_name} FAILED! ({experiment_result['training_time']:.1f}s)")
             print(f"Error: {e.stderr[-500:]}")
@@ -97,8 +97,8 @@ class ExperimentRunner:
                 'error': str(e),
                 'config_name': config_name,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'scheduler_type': 'ReduceLROnPlateau',
-                'experimentation': 1
+                'optimizer': 'Adafactor',
+                'experimentation': 2
             }
             print(f"💥 Exception in {experiment_name}: {e}")
 
@@ -130,38 +130,76 @@ class ExperimentRunner:
                 print(f"⚠️ Failed to parse metric line: {line} ({e})")
         return metrics
 
-    def run_experiment_batch(self, experiments, batch_name):
-        print(f"🎯 Running Batch {batch_name}: {len(experiments)} experiments")
-        print(f"🚀 Experiments in this batch:")
-        for config, name in experiments:
-            print(f"   - {name} ({config})")
+    def run_experiment_batch(self, experiments, batch_number):
+        """Run a batch of experiments in parallel"""
+        print(f"🎯 Running Batch {batch_number}: {len(experiments)} experiments")
+        print("🚀 Experiments in this batch:")
+        for config_name, exp_name in experiments:
+            print(f"   - {exp_name} ({config_name})")
         print("=" * 80)
 
         start_time = time.time()
         with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
             future_to_exp = {
-                executor.submit(self.run_single_experiment, config, name): name
-                for config, name in experiments
+                executor.submit(self.run_single_experiment, config_name, exp_name): (config_name, exp_name)
+                for config_name, exp_name in experiments
             }
-            completed = 0
             for future in as_completed(future_to_exp):
-                exp_name = future_to_exp[future]
-                completed += 1
+                config_name, exp_name = future_to_exp[future]
                 try:
                     result = future.result()
-                    status_emoji = "✅" if result['status'] == 'success' else "❌"
-                    scheduler_info = f" [ReduceLROnPlateau]" if result.get('scheduler_type') == 'ReduceLROnPlateau' else ""
-                    print(f"\n{status_emoji} [{completed}/{len(experiments)}] {exp_name}{scheduler_info}: {result['status']}")
-                    if result.get('metrics'):
-                        print(f"   📊 ROUGE-L: {result['metrics'].get('rougeL', 0):.4f}")
-                    else:
-                        print(f"   ⚠️ No metrics available for {exp_name}")
+                    print(f"✅ [{exp_name}] completed with status: {result['status']}")
                 except Exception as e:
-                    print(f"💥 {exp_name} crashed: {e}")
+                    print(f"❌ [{exp_name}] failed with exception: {e}")
 
-        batch_time = time.time() - start_time
-        print(f"\n🏁 Batch {batch_name} completed in {batch_time:.1f}s")
+        total_time = time.time() - start_time
+        print(f"\n🏁 Batch {batch_number} completed in {total_time:.1f}s")
+
+        # Save results
+        results_file = Path(f"./experiments/experiment_results.json")
+        with open(results_file, 'w') as f:
+            json.dump(self.results, f, indent=2, default=str)
+        print(f"📁 Results saved to: {results_file}")
+
         return self.results
+
+def run_batch_experiments(batch_number=1):
+    if batch_number not in EXPERIMENT_BATCHES:
+        print(f"❌ Invalid batch number: {batch_number}")
+        print(f"Available batches: {list(EXPERIMENT_BATCHES.keys())}")
+        return
+
+    experiments = EXPERIMENT_BATCHES[batch_number]
+    print("🎯 EXPERIMENTATION 2: Adafactor Optimizer")
+    print("=" * 70)
+    print("🔧 NEW FEATURES IN THIS EXPERIMENTATION:")
+    print("✅ Adafactor optimizer with fixed learning rate")
+    print("✅ No learning rate scheduler")
+    print("✅ Enhanced monitoring and logging")
+    print("✅ Maintains all existing optimizations")
+    print("✅ Fixed config path references for proper Hydra loading")
+    print("🆕 RUNNING EXPERIMENTATION 2 CONFIGS!")
+    print("=" * 70)
+
+    runner = ExperimentRunner(max_parallel=2)
+    results = runner.run_experiment_batch(experiments, batch_number)
+    if results:
+        try:
+            best_exp_name = max(results, key=lambda x: results[x].get('metrics', {}).get('rougeL', 0))
+            best_result = results[best_exp_name]
+            print(f"\n🏆 BATCH {batch_number} WINNER: {best_exp_name}")
+            if best_result.get('metrics'):
+                print(f"📈 ROUGE-L Score: {best_result['metrics'].get('rougeL', 0):.4f}")
+                print(f"📁 Model Location: {best_result['output_dir']}/final_model")
+                print(f"⚙️ Config Used: conf/experiments/{best_result['config_name']}.yaml")
+                print(f"⏱️ Training Time: {best_result['total_time']/60:.1f} minutes")
+                print(f"🔧 Optimizer: Adafactor")
+                print(f"🧪 Experimentation: {best_result.get('experimentation', 'N/A')}")
+            else:
+                print(f"⚠️ No metrics available for winner {best_exp_name}")
+        except Exception as e:
+            print(f"❌ Failed to determine batch winner: {e}")
+    return results
 
 # Updated experiment batches with new adaptive configs
 EXPERIMENT_BATCHES = {
@@ -178,59 +216,19 @@ EXPERIMENT_BATCHES = {
         ("optimized_v2", "optimized_v2")
     ],
     4: [
-        ("optimized_adaptive", "optimized_adaptive"),          
-        ("baseline_adaptive", "baseline_adaptive")      
+        ("optimized_adaptive", "optimized_adaptive"),
+        ("baseline_adaptive", "baseline_adaptive")
     ],
     5: [
-        ("optimized_enhanced", "optimized_enhanced"),          
-        ("baseline_enhanced", "baseline_enhanced") 
+        ("optimized_enhanced", "optimized_enhanced"),
+        ("baseline_enhanced", "baseline_enhanced")
     ],
     6: [
         ("length_optimized", "length_optimized")
     ]
 }
 
-def run_batch_experiments(batch_number=1):
-    if batch_number not in EXPERIMENT_BATCHES:
-        print(f"❌ Invalid batch number: {batch_number}")
-        print(f"Available batches: {list(EXPERIMENT_BATCHES.keys())}")
-        return
-
-    experiments = EXPERIMENT_BATCHES[batch_number]
-    print("🎯 EXPERIMENTATION 1: ReduceLROnPlateau SCHEDULER")
-    print("=" * 70)
-    print("🔧 NEW FEATURES IN THIS EXPERIMENTATION:")
-    print("✅ ReduceLROnPlateau adaptive learning rate scheduler")
-    print("✅ Configurable patience, factor, and threshold parameters")
-    print("✅ Enhanced monitoring and logging of LR changes")
-    print("✅ Maintains all existing optimizations")
-    print("✅ New adaptive configurations for testing")
-    print("✅ Fixed config path references for proper Hydra loading")
-    if batch_number >= 3:
-        print("🆕 RUNNING EXPERIMENTATION 1 CONFIGS!")
-    print("=" * 70)
-
-    runner = ExperimentRunner(max_parallel=2)
-    results = runner.run_experiment_batch(experiments, batch_number)
-    if results:
-        try:
-            best_exp_name = max(results, key=lambda x: results[x].get('metrics', {}).get('rougeL', 0))
-            best_result = results[best_exp_name]
-            print(f"\n🏆 BATCH {batch_number} WINNER: {best_exp_name}")
-            if best_result.get('metrics'):
-                print(f"📈 ROUGE-L Score: {best_result['metrics'].get('rougeL', 0):.4f}")
-                print(f"📁 Model Location: {best_result['output_dir']}/final_model")
-                print(f"⚙️ Config Used: conf/experiments/{best_result['config_name']}.yaml")
-                print(f"⏱️ Training Time: {best_result['total_time']/60:.1f} minutes")
-                print(f"🔧 Scheduler: {best_result.get('scheduler_type', 'Unknown')}")
-                print(f"🧪 Experimentation: {best_result.get('experimentation', 'N/A')}")
-            else:
-                print(f"⚠️ No metrics available for winner {best_exp_name}")
-        except Exception as e:
-            print(f"❌ Failed to determine batch winner: {e}")
-    return results
-
 if __name__ == "__main__":
     import sys
-    batch_number = int(sys.argv[1]) if len(sys.argv) > 1 else 4  # Default to new adaptive batch
+    batch_number = int(sys.argv[1]) if len(sys.argv) > 1 else 6  # Default to batch 6
     results = run_batch_experiments(batch_number)
