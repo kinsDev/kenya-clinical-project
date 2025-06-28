@@ -1,53 +1,16 @@
 import os
 import torch
-from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback, TrainerCallback
+from transformers import T5ForConditionalGeneration, T5Tokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq, EarlyStoppingCallback, TrainerCallback, Adafactor
 from datasets import load_from_disk
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import json
 from pathlib import Path
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-class ReduceLROnPlateauCallback(TrainerCallback):
-    def __init__(self, trainer, config):
-        self.trainer = trainer
-        self.config = config
-        self.scheduler = None
-        
-        # Check if scheduler config exists (now without experiments prefix)
-        if hasattr(self.config, 'scheduler'):
-            print("✅ Found scheduler configuration")
-            print(f"Scheduler settings: {OmegaConf.to_container(self.config.scheduler)}")
-        else:
-            print("⚠️ No scheduler configuration found, using defaults")
-        
-    def on_train_begin(self, args, state, control, **kwargs):
-        if self.scheduler is None and hasattr(self.config, 'scheduler'):
-            print("🔧 Initializing ReduceLROnPlateau scheduler...")
-            self.scheduler = ReduceLROnPlateau(
-                self.trainer.optimizer,
-                mode='min',
-                factor=self.config.scheduler.factor,
-                patience=self.config.scheduler.patience,
-                threshold=self.config.scheduler.threshold,
-                min_lr=self.config.scheduler.min_lr,
-                verbose=True
-            )
-            print("✅ ReduceLROnPlateau scheduler initialized")
-        
-    def on_evaluate(self, args, state, control, metrics, **kwargs):
-        if self.scheduler is not None and metrics is not None and 'eval_loss' in metrics:
-            old_lr = self.trainer.optimizer.param_groups[0]['lr']
-            self.scheduler.step(metrics['eval_loss'])
-            new_lr = self.trainer.optimizer.param_groups[0]['lr']
-            if old_lr != new_lr:
-                print(f"📉 Learning rate reduced: {old_lr:.2e} → {new_lr:.2e}")
 
 class MedicalT5Trainer:
     def __init__(self, config: DictConfig):
         self.config = config
         self.validate_config()
-        # Fixed: Remove experiments prefix since we're loading config directly
         self.model_name = self.config.model.name
         self.output_dir = self.config.paths.output_dir
         try:
@@ -58,7 +21,6 @@ class MedicalT5Trainer:
         self.model = None
 
     def validate_config(self):
-        """Validate configuration to ensure required keys exist - Updated for direct config loading"""
         required_keys = [
             ('model.name', 'Model name (e.g., t5-small)'),
             ('paths.output_dir', 'Output directory path'),
@@ -75,27 +37,18 @@ class MedicalT5Trainer:
             ('vignette_training.label_smoothing_factor', 'Label smoothing factor'),
             ('paths.logs_dir', 'Logging directory')
         ]
-        
         print("🔍 Validating configuration structure...")
         print(f"Config keys available: {list(self.config.keys())}")
-        
         for key, desc in required_keys:
-            try:
-                value = OmegaConf.select(self.config, key)
-                if value is None:
-                    print(f"❌ Missing config key: {key} ({desc})")
-                    print(f"Config structure:\n{OmegaConf.to_yaml(self.config)}")
-                    raise ValueError(f"Missing configuration key: {key}")
-                else:
-                    print(f"✅ Found {key}: {value}")
-            except Exception as e:
-                print(f"❌ Error accessing config key: {key} ({desc})")
+            value = OmegaConf.select(self.config, key)
+            if value is None:
+                print(f"❌ Missing config key: {key} ({desc})")
                 print(f"Config structure:\n{OmegaConf.to_yaml(self.config)}")
-                raise ValueError(f"Configuration error for {key}: {e}")
+                raise ValueError(f"Missing configuration key: {key}")
+            print(f"✅ Found {key}: {value}")
         print("✅ Configuration validated successfully")
 
     def load_model(self):
-        """Load the standard T5 model"""
         try:
             self.model = T5ForConditionalGeneration.from_pretrained(self.model_name)
             if len(self.tokenizer) != self.model.config.vocab_size:
@@ -109,7 +62,6 @@ class MedicalT5Trainer:
             raise
 
     def train(self, epochs=None):
-        """Train the model on vignettes"""
         print("🚀 Starting training...")
         if epochs is None:
             epochs = self.config.vignette_training.epochs
@@ -133,7 +85,6 @@ class MedicalT5Trainer:
 
         self.load_model()
 
-        # Fixed: Remove experiments prefix from all config access
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
             num_train_epochs=epochs,
@@ -162,6 +113,14 @@ class MedicalT5Trainer:
             gradient_checkpointing=True,
         )
 
+        optimizer = Adafactor(
+            self.model.parameters(),
+            lr=self.config.vignette_training.learning_rate,
+            scale_parameter=True,
+            weight_decay=self.config.vignette_training.weight_decay,
+            relative_step=False
+        )
+
         data_collator = DataCollatorForSeq2Seq(
             tokenizer=self.tokenizer,
             model=self.model,
@@ -175,12 +134,9 @@ class MedicalT5Trainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
+            optimizers=(optimizer, None),
             callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
         )
-
-        # Add the custom scheduler callback
-        reduce_lr_callback = ReduceLROnPlateauCallback(trainer, self.config)
-        trainer.add_callback(reduce_lr_callback)
 
         print("Starting training...")
         try:
@@ -196,7 +152,6 @@ class MedicalT5Trainer:
             raise
 
     def _save_training_metrics(self, trainer, phase_name):
-        """Save training metrics"""
         try:
             metrics = {
                 'phase': phase_name,
@@ -215,30 +170,28 @@ class MedicalT5Trainer:
         except Exception as e:
             print(f"⚠️ Failed to save metrics: {e}")
 
-@hydra.main(version_base=None, config_path="../conf/experiments", config_name="baseline_v2")
+@hydra.main(version_base=None, config_path="../conf/experiments", config_name="length_optimized")
 def main(cfg: DictConfig):
-    print("🔧 EXPERIMENTATION 1: ReduceLROnPlateau SCHEDULER")
+    print("🔧 EXPERIMENTATION 2: AdaFactor Only")
     print("=" * 50)
     print("✅ MAIN FUNCTION STARTED")
     print("Current working directory:", os.getcwd())
     print("=" * 50)
-    
+
     print("Loaded configuration:")
     print(OmegaConf.to_yaml(cfg))
     print("=" * 60)
-    print("NEW FEATURES: ReduceLROnPlateau SCHEDULER")
+    print("NEW FEATURES: AdaFactor Only")
     print("=" * 60)
-    
+
     if torch.cuda.is_available():
         print(f"CUDA available: {torch.cuda.get_device_name(0)}")
         print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     else:
         print("CUDA not available, using CPU")
-    
+
     try:
-        # Disable struct mode to allow dynamic key access
         OmegaConf.set_struct(cfg, False)
-        
         trainer = MedicalT5Trainer(cfg)
         os.makedirs(trainer.output_dir, exist_ok=True)
         print("\n🔧 PRIORITY FIXES APPLIED:")
@@ -249,8 +202,9 @@ def main(cfg: DictConfig):
         print("✅ Consistent tokenizer handling")
         print("✅ Added validation")
         print("✅ Enhanced config validation")
-        print("✅ Fixed config path access - removed experiments prefix")
+        print("✅ Fixed config path access")
         print("✅ Updated for direct config loading")
+        print("✅ Switched to AdaFactor only")
         print("=" * 40)
         trainer.train()
         print("\n" + "=" * 60)
