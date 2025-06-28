@@ -225,6 +225,9 @@ EXPERIMENT_BATCHES = {
     ],
     6: [
         ("length_optimized", "length_optimized")
+    ],
+    7: [
+        ("improved_training", "improved_training")
     ]
 }
 

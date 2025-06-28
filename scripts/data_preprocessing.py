@@ -319,23 +319,22 @@ def augment_prompt(prompt: str, augmentation_factor: int = 3) -> List[Dict]:
     return augmented_data
 
 def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int = 3) -> None:
-    """Preprocess and augment dataset, saving as Hugging Face datasets."""
+    """Fixed preprocessing - don't normalize training targets, use stratified split"""
     os.makedirs(output_dir, exist_ok=True)
     df = pd.read_csv(input_file)
+    
     if 'Prompt' not in df.columns or 'Clinician' not in df.columns:
         raise ValueError("Input CSV must contain 'Prompt' and 'Clinician' columns")
     logging.info(f"Loaded {input_file} with {len(df)} rows")
 
-    # Clean and normalize Clinician for ROUGE compatibility
-    df['Clinician'] = df['Clinician'].apply(clean_clinician_text)
-    df['Clinician'] = df['Clinician'].apply(normalize_text)
-
-    # Apply simplified prompt format (inspired by original script)
+    # Clean but DON'T normalize Clinician responses during training
+    df['Clinician'] = df['Clinician'].apply(clean_clinician_text)  # Only clean, don't normalize
+    
+    # Apply prompt format
     df['Prompt'] = df['Prompt'].apply(lambda x: f"Clinical scenario: {x}")
 
     augmented_data = []
-    from transformers import T5Tokenizer
-    tokenizer = T5Tokenizer.from_pretrained("t5-base")  # Updated to t5-base
+    tokenizer = T5Tokenizer.from_pretrained("t5-base")
     
     for idx, row in df.iterrows():
         prompt = str(row['Prompt'])
@@ -346,24 +345,24 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
                 new_row["techniques"] = data["techniques"]
             for col in df.columns:
                 if col == 'Clinician':
-                    new_row['labels'] = str(row[col]) if pd.notnull(row[col]) else ""  # Rename to labels
+                    # Keep original format for training - NO NORMALIZATION
+                    new_row['labels'] = str(row[col]) if pd.notnull(row[col]) else ""
                 elif col != 'Prompt':
                     new_row[col] = str(row[col]) if pd.notnull(row[col]) else ""
             
-            # Validate that both Prompt and labels are non-empty strings
-            if not new_row['Prompt'] or not isinstance(new_row['Prompt'], str) or not new_row['Prompt'].strip():
-                logging.warning(f"Row {idx}: Empty or invalid Prompt, skipping")
-                continue
-            if not new_row['labels'] or not isinstance(new_row['labels'], str) or not new_row['labels'].strip():
-                logging.warning(f"Row {idx}: Empty or invalid labels, skipping")
-                continue
+            # Validate non-empty strings
+            if (new_row['Prompt'] and isinstance(new_row['Prompt'], str) and new_row['Prompt'].strip() and
+                new_row['labels'] and isinstance(new_row['labels'], str) and new_row['labels'].strip()):
                 
-            # Check token lengths
-            prompt_tokens = len(tokenizer(new_row['Prompt']).input_ids)
-            label_tokens = len(tokenizer(new_row['labels']).input_ids) if new_row['labels'] else 0
-            if prompt_tokens > 512 or label_tokens > 512:
-                logging.warning(f"Row {idx}: Prompt tokens={prompt_tokens}, Label tokens={label_tokens} exceed 512")
-            augmented_data.append(new_row)
+                # Check token lengths
+                prompt_tokens = len(tokenizer(new_row['Prompt']).input_ids)
+                label_tokens = len(tokenizer(new_row['labels']).input_ids)
+                if prompt_tokens > 512 or label_tokens > 512:
+                    logging.warning(f"Row {idx}: Prompt tokens={prompt_tokens}, Label tokens={label_tokens} exceed 512")
+                
+                augmented_data.append(new_row)
+            else:
+                logging.warning(f"Row {idx}: Invalid Prompt or labels, skipping")
 
     if not augmented_data:
         raise ValueError("No valid data after preprocessing and augmentation")
@@ -371,17 +370,30 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
     print(f"✅ Created {len(augmented_data)} samples after augmentation")
     logging.info(f"Created {len(augmented_data)} samples after augmentation")
 
+    # Create stratified split to ensure better representation across different response lengths
     dataset = Dataset.from_list(augmented_data)
-    train_val_split = dataset.train_test_split(test_size=0.15, seed=42)
-    train_val_split['train'].save_to_disk(f"{output_dir}/train_dataset")
-    train_val_split['test'].save_to_disk(f"{output_dir}/val_dataset")
+    
+    # Add length bins for stratified splitting
+    def get_length_bin(example):
+        return min(len(example['labels'].split()) // 20, 5)  # Bins: 0-19, 20-39, ..., 100+
+    
+    dataset = dataset.map(lambda x: {**x, 'length_bin': get_length_bin(x)})
+    
+    # Use stratified split with increased validation size for better evaluation
+    train_val_split = dataset.train_test_split(test_size=0.2, seed=42, stratify_by_column='length_bin')
+    
+    # Remove the length_bin column before saving
+    train_dataset = train_val_split['train'].remove_columns(['length_bin'])
+    val_dataset = train_val_split['test'].remove_columns(['length_bin'])
+    
+    train_dataset.save_to_disk(f"{output_dir}/train_dataset")
+    val_dataset.save_to_disk(f"{output_dir}/val_dataset")
     
     # Process test data
     test_df = pd.read_csv("data/test.csv")
-    # Apply same prompt format to test data
     test_df['Prompt'] = test_df['Prompt'].apply(lambda x: f"Clinical scenario: {x}")
     
-    # Ensure test data has the required structure
+    # Ensure test data has required structure
     test_data = []
     for idx, row in test_df.iterrows():
         test_row = {}
@@ -397,11 +409,10 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
     test_dataset.save_to_disk(f"{output_dir}/test_dataset")
     
     print(f"✅ Datasets saved:")
-    print(f"  - Train: {len(train_val_split['train'])} samples")
-    print(f"  - Validation: {len(train_val_split['test'])} samples") 
+    print(f"  - Train: {len(train_dataset)} samples")
+    print(f"  - Validation: {len(val_dataset)} samples")
     print(f"  - Test: {len(test_dataset)} samples")
-    logging.info(f"Datasets saved - Train: {len(train_val_split['train'])}, Val: {len(train_val_split['test'])}, Test: {len(test_dataset)}")
-
+    logging.info(f"Datasets saved - Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
 
 if __name__ == "__main__":
     preprocess_data("data/train.csv", "outputs", augmentation_factor=3)

@@ -61,9 +61,21 @@ class MedicalT5Trainer:
     def load_model(self):
         try:
             self.model = T5ForConditionalGeneration.from_pretrained(self.model_name)
+            
+            # Add dropout for regularization
+            if hasattr(self.config, 'optimization') and hasattr(self.config.optimization, 'dropout'):
+                dropout_rate = self.config.optimization.dropout
+                print(f"🔧 Applying dropout regularization: {dropout_rate}")
+                for module in self.model.modules():
+                    if hasattr(module, 'dropout') and hasattr(module.dropout, 'p'):
+                        module.dropout.p = dropout_rate
+                        print(f"  - Updated dropout in {module.__class__.__name__}")
+                logging.info(f"Applied dropout regularization: {dropout_rate}")
+            
             if len(self.tokenizer) != self.model.config.vocab_size:
                 print(f"🔧 Resizing model embeddings: {self.model.config.vocab_size} → {len(self.tokenizer)}")
                 self.model.resize_token_embeddings(len(self.tokenizer))
+            
             print(f"✅ Model loaded: {self.model_name}")
             print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
             if torch.cuda.is_available():
@@ -76,19 +88,42 @@ class MedicalT5Trainer:
             raise
 
     def preprocess_function(self, examples):
-        """Tokenize the dataset properly"""
+        """Enhanced preprocessing with length filtering"""
         inputs = [ex for ex in examples['Prompt']]
         targets = [ex for ex in examples['labels']]
         
-        model_inputs = self.tokenizer(inputs, max_length=512, truncation=True, padding=False)
-        labels = self.tokenizer(targets, max_length=512, truncation=True, padding=False)
+        # Filter out extremely long sequences that might cause overfitting
+        filtered_inputs, filtered_targets = [], []
+        filtered_count = 0
+        
+        for inp, tgt in zip(inputs, targets):
+            inp_words = len(inp.split()) if inp else 0
+            tgt_words = len(tgt.split()) if tgt else 0
+            
+            # Length limits to prevent overfitting on very long sequences
+            if inp_words <= 100 and tgt_words <= 150 and inp_words > 0 and tgt_words > 0:
+                filtered_inputs.append(inp)
+                filtered_targets.append(tgt)
+            else:
+                filtered_count += 1
+        
+        if filtered_count > 0:
+            print(f"🔧 Filtered out {filtered_count} samples due to length constraints")
+            logging.info(f"Filtered out {filtered_count} samples due to length constraints")
+        
+        if not filtered_inputs:
+            print("⚠️ No samples passed length filtering, using original data")
+            filtered_inputs, filtered_targets = inputs, targets
+        
+        model_inputs = self.tokenizer(filtered_inputs, max_length=512, truncation=True, padding=False)
+        labels = self.tokenizer(filtered_targets, max_length=512, truncation=True, padding=False)
         
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
     def train(self, epochs=None):
-        print("🚀 Starting training...")
-        logging.info("Starting training...")
+        print("🚀 Starting enhanced training with regularization...")
+        logging.info("Starting enhanced training with regularization...")
         if epochs is None:
             epochs = self.config.vignette_training.epochs
     
@@ -145,8 +180,8 @@ class MedicalT5Trainer:
     
         self.load_model()
         
-        # Tokenize datasets
-        print("🔧 Tokenizing datasets...")
+        # Tokenize datasets with enhanced preprocessing
+        print("🔧 Tokenizing datasets with enhanced preprocessing...")
         train_dataset = train_dataset.map(
             self.preprocess_function,
             batched=True,
@@ -161,6 +196,7 @@ class MedicalT5Trainer:
         print(f"✅ Tokenized datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
         logging.info(f"Tokenized datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
     
+        # Enhanced training arguments with regularization
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
             num_train_epochs=epochs,
@@ -171,7 +207,7 @@ class MedicalT5Trainer:
             weight_decay=self.config.vignette_training.weight_decay,
             learning_rate=self.config.vignette_training.learning_rate,
             logging_dir=f"{self.config.paths.logs_dir}/training",
-            logging_steps=5,
+            logging_steps=10,  # Increased from 5 for better monitoring
             eval_strategy="steps",
             eval_steps=self.config.vignette_training.eval_steps,
             save_strategy="steps",
@@ -181,14 +217,24 @@ class MedicalT5Trainer:
             greater_is_better=False,
             fp16=torch.cuda.is_available(),
             dataloader_pin_memory=False,
-            save_total_limit=3,
+            save_total_limit=2,  # Reduced to save space
             report_to=[],
             label_smoothing_factor=self.config.vignette_training.label_smoothing_factor,
             warmup_ratio=0.1,
-            max_grad_norm=1.0,
+            max_grad_norm=getattr(self.config.optimization, 'max_grad_norm', 1.0) if hasattr(self.config, 'optimization') else 1.0,
             gradient_checkpointing=True,
             dataloader_num_workers=0,
+            # Add learning rate scheduling
+            lr_scheduler_type="cosine",
+            save_safetensors=True,
         )
+        
+        print("🔧 Enhanced training configuration:")
+        print(f"  - Learning rate scheduler: cosine")
+        print(f"  - Max gradient norm: {training_args.max_grad_norm}")
+        print(f"  - Save total limit: {training_args.save_total_limit}")
+        print(f"  - Logging steps: {training_args.logging_steps}")
+        logging.info(f"Enhanced training configuration applied")
     
         optimizer = Adafactor(
             self.model.parameters(),
@@ -216,20 +262,20 @@ class MedicalT5Trainer:
             callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
         )
     
-        print("Starting training...")
-        logging.info("Starting training with Trainer...")
+        print("🚀 Starting enhanced training with regularization...")
+        logging.info("Starting enhanced training with regularization...")
         try:
             trainer.train()
             final_model_path = f"{self.output_dir}/final_model"
             trainer.save_model(final_model_path)
             self.tokenizer.save_pretrained(final_model_path)
             self._save_training_metrics(trainer, "training")
-            print(f"✅ Training completed! Model saved to: {final_model_path}")
-            logging.info(f"Training completed! Model saved to: {final_model_path}")
+            print(f"✅ Enhanced training completed! Model saved to: {final_model_path}")
+            logging.info(f"Enhanced training completed! Model saved to: {final_model_path}")
             return trainer
         except Exception as e:
-            print(f"❌ Training failed: {e}")
-            logging.error(f"Training failed: {e}")
+            print(f"❌ Enhanced training failed: {e}")
+            logging.error(f"Enhanced training failed: {e}")
             raise
 
     def _save_training_metrics(self, trainer, phase_name):
@@ -242,29 +288,41 @@ class MedicalT5Trainer:
                 'epochs_completed': trainer.state.epoch,
                 'best_model_checkpoint': trainer.state.best_model_checkpoint,
                 'log_history': trainer.state.log_history[-10:],
-                'timestamp': trainer.state.log_history[-1].get('epoch', 0)
+                'timestamp': trainer.state.log_history[-1].get('epoch', 0),
+                'enhancements_applied': {
+                    'dropout_regularization': hasattr(self.config, 'optimization') and hasattr(self.config.optimization, 'dropout'),
+                    'length_filtering': True,
+                    'cosine_lr_scheduler': True,
+                    'enhanced_preprocessing': True
+                }
             }
             metrics_file = Path(self.output_dir) / f'{phase_name}_metrics.json'
             with open(metrics_file, 'w') as f:
                 json.dump(metrics, f, indent=2, default=str)
-            print(f"✅ Metrics saved to: {metrics_file}")
-            logging.info(f"Metrics saved to: {metrics_file}")
+            print(f"✅ Enhanced metrics saved to: {metrics_file}")
+            logging.info(f"Enhanced metrics saved to: {metrics_file}")
         except Exception as e:
             print(f"⚠️ Failed to save metrics: {e}")
             logging.error(f"Failed to save metrics: {e}")
 
 @hydra.main(version_base=None, config_path="../conf/experiments", config_name="length_optimized")
 def main(cfg: DictConfig):
-    print("🔧 EXPERIMENTATION 2: AdaFactor Only")
-    print("=" * 50)
+    print("🔧 EXPERIMENTATION 2: Enhanced AdaFactor with Regularization")
+    print("=" * 60)
     print("✅ MAIN FUNCTION STARTED")
     print("Current working directory:", os.getcwd())
-    print("=" * 50)
+    print("=" * 60)
 
     print("Loaded configuration:")
     print(OmegaConf.to_yaml(cfg))
     print("=" * 60)
-    print("NEW FEATURES: AdaFactor Only")
+    print("🆕 NEW ENHANCED FEATURES:")
+    print("✅ Dropout regularization")
+    print("✅ Length-based filtering")
+    print("✅ Cosine learning rate scheduler")
+    print("✅ Enhanced preprocessing")
+    print("✅ Improved gradient clipping")
+    print("✅ Optimized save strategy")
     print("=" * 60)
 
     if torch.cuda.is_available():
@@ -279,29 +337,40 @@ def main(cfg: DictConfig):
         OmegaConf.set_struct(cfg, False)
         trainer = MedicalT5Trainer(cfg)
         os.makedirs(trainer.output_dir, exist_ok=True)
-        print("\n🔧 PRIORITY FIXES APPLIED:")
-        print("=" * 40)
+        print("\n🔧 ENHANCED FEATURES APPLIED:")
+        print("=" * 50)
         print("✅ Removed multitask learning")
         print("✅ Removed PubMed training")
-        print("✅ Simplified training")
+        print("✅ Simplified training pipeline")
         print("✅ Consistent tokenizer handling")
-        print("✅ Added validation")
-        print("✅ Enhanced config validation")
+        print("✅ Enhanced validation")
+        print("✅ Improved config validation")
         print("✅ Fixed config path access")
         print("✅ Updated for direct config loading")
-        print("✅ Switched to AdaFactor only")
+        print("✅ Switched to AdaFactor optimizer")
         print("✅ Fixed dataset tokenization")
-        print("=" * 40)
+        print("🆕 Added dropout regularization")
+        print("🆕 Added length-based filtering")
+        print("🆕 Added cosine LR scheduler")
+        print("🆕 Enhanced preprocessing pipeline")
+        print("🆕 Improved gradient management")
+        print("🆕 Optimized storage strategy")
+        print("=" * 50)
         trainer.train()
-        print("\n" + "=" * 60)
-        print("🎉 TRAINING COMPLETED SUCCESSFULLY!")
-        print("=" * 60)
+        print("\n" + "=" * 70)
+        print("🎉 ENHANCED TRAINING COMPLETED SUCCESSFULLY!")
+        print("=" * 70)
         print(f"Model saved to: {trainer.output_dir}/final_model")
+        print("🔧 Enhanced features successfully applied:")
+        print("  - Regularization techniques")
+        print("  - Advanced preprocessing")
+        print("  - Optimized training schedule")
+        print("  - Improved monitoring")
     except Exception as e:
-        print(f"❌ Training failed: {e}")
+        print(f"❌ Enhanced training failed: {e}")
         import traceback
         traceback.print_exc()
-        logging.error(f"Main function failed: {e}\n{traceback.format_exc()}")
+        logging.error(f"Enhanced training failed: {e}\n{traceback.format_exc()}")
         raise
 
 if __name__ == '__main__':

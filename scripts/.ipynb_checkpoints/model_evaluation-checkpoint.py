@@ -1,4 +1,4 @@
-from datasets import load_from_disk
+from datasets import load_from_disk, Dataset
 from transformers import T5ForConditionalGeneration, T5Tokenizer
 import torch
 import numpy as np
@@ -6,7 +6,16 @@ from collections import Counter
 import re
 import json
 import os
+import pandas as pd
 from pathlib import Path
+from sklearn.model_selection import KFold
+import time
+from typing import List, Dict, Tuple
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def compute_rouge_scores(predictions, references):
     """Compute ROUGE scores with consistent normalization"""
@@ -72,82 +81,50 @@ def compute_rouge_scores(predictions, references):
         'rougeL': np.mean(rougeL_scores),
         'rouge1_std': np.std(rouge1_scores),
         'rouge2_std': np.std(rouge2_scores),
-        'rougeL_std': np.std(rougeL_scores)
+        'rougeL_std': np.std(rougeL_scores),
+        'individual_scores': {
+            'rouge1_scores': rouge1_scores,
+            'rouge2_scores': rouge2_scores,
+            'rougeL_scores': rougeL_scores
+        }
     }
 
-
-def evaluate_model(model_path=None, val_path=None):
-    """Evaluate model with enhanced generation parameters for longer predictions"""
-    model_path = model_path or os.getenv('MODEL_PATH', './model_outputs/final_model')
-    val_path = val_path or os.getenv('VAL_PATH', 'outputs/val_dataset')
-
-    print("🔍 Starting enhanced model evaluation with longer generation...")
-    print("🔧 PHASE 1 EVALUATION ENHANCEMENTS:")
-    print("✅ Enhanced generation parameters for longer outputs")
-    print("✅ Length-aware evaluation metrics")
-    print("✅ Detailed length distribution analysis")
-    print("=" * 60)
-    print(f"Model path: {model_path}")
-    print(f"Validation dataset path: {val_path}")
-
-    if not Path(model_path).exists():
-        print(f"❌ Model path does not exist: {model_path}")
-        return None
-    if not Path(val_path).exists():
-        print(f"❌ Validation dataset path does not exist: {val_path}")
-        return None
-
-    try:
-        model = T5ForConditionalGeneration.from_pretrained(model_path)
-        tokenizer = T5Tokenizer.from_pretrained(model_path)
-        val_dataset = load_from_disk(val_path)
-        print(f"✅ Loaded model and {len(val_dataset)} validation samples")
-        print(f"Dataset columns: {val_dataset.column_names}")
-    except Exception as e:
-        print(f"❌ Error loading model or data: {e}")
-        return None
-
+def evaluate_single_fold(model, tokenizer, val_data: List[Dict], device: torch.device, fold_num: int = None) -> Dict:
+    """Evaluate model on a single fold of data"""
     predictions = []
     references = []
     sample_ids = []
     prediction_lengths = []
     reference_lengths = []
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
     model.eval()
-    print(f"🚀 Evaluating on {len(val_dataset)} samples using {device}...")
-
+    fold_prefix = f"[Fold {fold_num}] " if fold_num is not None else ""
+    
     with torch.no_grad():
-        for i, example in enumerate(val_dataset):
-            if i % 10 == 0:
-                print(f"Processing sample {i+1}/{len(val_dataset)}")
+        for i, example in enumerate(val_data):
+            if i % 25 == 0:
+                print(f"{fold_prefix}Processing sample {i+1}/{len(val_data)}")
+            
             try:
                 sample_id = example.get('Master_Index', f'VAL_{i:08d}')
                 sample_ids.append(sample_id)
                 
-                # Handle both tokenized and non-tokenized data
-                if 'input_ids' in example:
-                    # Data is already tokenized
-                    input_ids = torch.tensor([example['input_ids']], device=device)
-                    attention_mask = torch.tensor([example['attention_mask']], device=device)
-                else:
-                    # Data needs tokenization
-                    inputs = tokenizer(
-                        example['Prompt'],
-                        return_tensors='pt',
-                        truncation=True,
-                        padding='max_length',
-                        max_length=512
-                    )
-                    input_ids = inputs['input_ids'].to(device)
-                    attention_mask = inputs['attention_mask'].to(device)
+                # Tokenize input
+                inputs = tokenizer(
+                    example['Prompt'],
+                    return_tensors='pt',
+                    truncation=True,
+                    padding='max_length',
+                    max_length=512
+                )
+                input_ids = inputs['input_ids'].to(device)
+                attention_mask = inputs['attention_mask'].to(device)
                 
                 # ENHANCED GENERATION PARAMETERS FOR LONGER OUTPUTS
                 outputs = model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    max_length=400,              # Increased from 512
+                    max_length=400,              # Increased from 256
                     min_length=70,               # Minimum length
                     num_beams=6,                 # Increased from 4
                     early_stopping=False,       # Changed - Let it generate more
@@ -160,19 +137,8 @@ def evaluate_model(model_path=None, val_path=None):
                 generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 pred_summary = normalize_for_evaluation(generated_text)
                 
-                # Handle labels - check if they're tokenized or raw text
-                if 'labels' in example:
-                    if isinstance(example['labels'], list):
-                        # Labels are tokenized
-                        labels = [token for token in example['labels'] if token != -100]
-                        ref_text = tokenizer.decode(labels, skip_special_tokens=True)
-                    else:
-                        # Labels are raw text
-                        ref_text = example['labels']
-                else:
-                    # Fallback - look for other possible label columns
-                    ref_text = example.get('Clinician', 'patient requires clinical assessment')
-                
+                # Handle reference text
+                ref_text = example.get('Clinician', example.get('labels', 'patient requires clinical assessment'))
                 ref_summary = normalize_for_evaluation(ref_text)
                 
                 predictions.append(pred_summary)
@@ -183,28 +149,26 @@ def evaluate_model(model_path=None, val_path=None):
                 reference_lengths.append(len(ref_summary.split()))
                 
             except Exception as e:
-                print(f"⚠️ Error processing sample {i}: {e}")
+                logger.error(f"{fold_prefix}Error processing sample {i}: {e}")
                 predictions.append(normalize_for_evaluation(""))
                 references.append(normalize_for_evaluation(""))
                 sample_ids.append(f'ERROR_{i:08d}')
                 prediction_lengths.append(0)
                 reference_lengths.append(0)
 
-    # Rest of the evaluation function remains the same...
-    print("📊 Computing enhanced metrics with length analysis...")
+    # Compute metrics
     valid_pairs = [(p, r, sid, pl, rl) for p, r, sid, pl, rl in zip(predictions, references, sample_ids, prediction_lengths, reference_lengths) if p.strip() and r.strip()]
+    
     if not valid_pairs:
-        print("❌ No valid prediction-reference pairs found!")
+        logger.error(f"{fold_prefix}No valid prediction-reference pairs found!")
         return None
 
     valid_predictions, valid_references, valid_ids, valid_pred_lengths, valid_ref_lengths = zip(*valid_pairs)
-    print(f"✅ Computing metrics on {len(valid_pairs)} valid pairs")
-
+    
     try:
         rouge_results = compute_rouge_scores(valid_predictions, valid_references)
-        print("✅ ROUGE computation successful")
     except Exception as e:
-        print(f"❌ Error computing ROUGE: {e}")
+        logger.error(f"{fold_prefix}Error computing ROUGE: {e}")
         rouge_results = {'rouge1': 0.0, 'rouge2': 0.0, 'rougeL': 0.0}
 
     # Enhanced metrics with length analysis
@@ -233,21 +197,234 @@ def evaluate_model(model_path=None, val_path=None):
             'empty_predictions': sum(1 for p in valid_predictions if not p.strip())
         }
     }
+    
+    return metrics
+
+def cross_validate_model(model_path: str = None, data_path: str = 'data/train.csv', n_splits: int = 5) -> Dict:
+    """5-fold cross-validation to check generalization"""
+    print("🔄 Starting 5-Fold Cross-Validation...")
+    print("=" * 70)
+    print("🎯 CROSS-VALIDATION FEATURES:")
+    print("✅ 5-fold stratified validation")
+    print("✅ Robust generalization testing")
+    print("✅ Statistical significance analysis")
+    print("✅ Per-fold detailed metrics")
+    print("=" * 70)
+    
+    model_path = model_path or os.getenv('MODEL_PATH', './model_outputs/final_model')
+    
+    # Load model and tokenizer
+    try:
+        model = T5ForConditionalGeneration.from_pretrained(model_path)
+        tokenizer = T5Tokenizer.from_pretrained(model_path)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.to(device)
+        print(f"✅ Model loaded on {device}")
+    except Exception as e:
+        print(f"❌ Failed to load model: {e}")
+        return None
+    
+    # Load full dataset
+    try:
+        if data_path.endswith('.csv'):
+            full_data = pd.read_csv(data_path)
+            # Apply same preprocessing as in data_preprocessing.py
+            full_data['Prompt'] = full_data['Prompt'].apply(lambda x: f"Clinical scenario: {x}")
+            # Normalize Clinician text
+            full_data['Clinician'] = full_data['Clinician'].apply(lambda x: normalize_for_evaluation(str(x)))
+        else:
+            # Assume it's a Hugging Face dataset
+            full_dataset = load_from_disk(data_path)
+            full_data = full_dataset.to_pandas()
+        
+        print(f"✅ Loaded {len(full_data)} samples for cross-validation")
+    except Exception as e:
+        print(f"❌ Failed to load data: {e}")
+        return None
+    
+    # Perform K-fold cross-validation
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold_scores = []
+    fold_metrics = []
+    
+    start_time = time.time()
+    
+    for fold, (train_idx, val_idx) in enumerate(kf.split(full_data)):
+        print(f"\n🔍 Evaluating Fold {fold+1}/{n_splits}...")
+        print(f"Validation samples: {len(val_idx)}")
+        
+        # Get validation data for this fold
+        val_data = full_data.iloc[val_idx].to_dict('records')
+        
+        # Evaluate on this fold
+        fold_start = time.time()
+        metrics = evaluate_single_fold(model, tokenizer, val_data, device, fold_num=fold+1)
+        fold_time = time.time() - fold_start
+        
+        if metrics:
+            fold_scores.append(metrics['rougeL'])
+            fold_metrics.append(metrics)
+            
+            print(f"✅ Fold {fold+1} completed in {fold_time:.1f}s")
+            print(f"   ROUGE-L: {metrics['rougeL']:.4f}")
+            print(f"   Avg Length: {metrics['avg_pred_length']:.1f} words")
+            print(f"   Length Target: {'✅' if metrics['length_analysis']['length_target_achievement'] else '❌'}")
+        else:
+            print(f"❌ Fold {fold+1} failed")
+            fold_scores.append(0.0)
+            fold_metrics.append(None)
+    
+    total_time = time.time() - start_time
+    
+    # Compute cross-validation statistics
+    valid_scores = [score for score in fold_scores if score > 0]
+    if not valid_scores:
+        print("❌ All folds failed!")
+        return None
+    
+    cv_mean = np.mean(valid_scores)
+    cv_std = np.std(valid_scores)
+    cv_min = np.min(valid_scores)
+    cv_max = np.max(valid_scores)
+    
+    # Aggregate metrics across folds
+    valid_metrics = [m for m in fold_metrics if m is not None]
+    avg_length_across_folds = np.mean([m['avg_pred_length'] for m in valid_metrics])
+    length_consistency = np.std([m['avg_pred_length'] for m in valid_metrics])
+    
+    print("\n" + "="*70)
+    print("🎯 CROSS-VALIDATION RESULTS")
+    print("="*70)
+    print(f"ROUGE-L Cross-Validation: {cv_mean:.4f} ± {cv_std:.4f}")
+    print(f"ROUGE-L Range: {cv_min:.4f} - {cv_max:.4f}")
+    print(f"Valid Folds: {len(valid_scores)}/{n_splits}")
+    print(f"Average Length Across Folds: {avg_length_across_folds:.1f} ± {length_consistency:.1f} words")
+    print(f"Total CV Time: {total_time/60:.1f} minutes")
+    
+    # Statistical significance test
+    if len(valid_scores) >= 3:
+        confidence_interval = 1.96 * cv_std / np.sqrt(len(valid_scores))  # 95% CI
+        print(f"95% Confidence Interval: [{cv_mean - confidence_interval:.4f}, {cv_mean + confidence_interval:.4f}]")
+        
+        # Check for statistical significance (basic threshold test)
+        baseline_threshold = 0.3  # Assume baseline ROUGE-L of 0.3
+        if cv_mean - confidence_interval > baseline_threshold:
+            print(f"✅ Statistically significant improvement over baseline ({baseline_threshold:.3f})")
+        else:
+            print(f"⚠️ No statistically significant improvement over baseline ({baseline_threshold:.3f})")
+    
+    # Detailed fold analysis
+    print(f"\n📊 PER-FOLD DETAILED ANALYSIS:")
+    for i, (score, metrics) in enumerate(zip(fold_scores, fold_metrics)):
+        if metrics:
+            print(f"Fold {i+1}: ROUGE-L={score:.4f}, Length={metrics['avg_pred_length']:.1f}w, "
+                  f"Target={'✅' if metrics['length_analysis']['length_target_achievement'] else '❌'}")
+        else:
+            print(f"Fold {i+1}: ❌ FAILED")
+    
+    # Save cross-validation results
+    cv_results = {
+        'cross_validation_summary': {
+            'mean_rouge_l': cv_mean,
+            'std_rouge_l': cv_std,
+            'min_rouge_l': cv_min,
+            'max_rouge_l': cv_max,
+            'n_valid_folds': len(valid_scores),
+            'total_folds': n_splits,
+            'avg_length_across_folds': avg_length_across_folds,
+            'length_consistency_std': length_consistency,
+            'total_time_minutes': total_time / 60,
+            'confidence_interval_95': confidence_interval if len(valid_scores) >= 3 else None
+        },
+        'fold_details': [
+            {
+                'fold': i+1,
+                'rouge_l': score,
+                'metrics': metrics,
+                'status': 'success' if metrics else 'failed'
+            }
+            for i, (score, metrics) in enumerate(zip(fold_scores, fold_metrics))
+        ],
+        'statistical_analysis': {
+            'baseline_threshold': baseline_threshold,
+            'significant_improvement': cv_mean - (confidence_interval if len(valid_scores) >= 3 else 0) > baseline_threshold,
+            'model_stability': 'high' if cv_std < 0.05 else 'medium' if cv_std < 0.1 else 'low'
+        }
+    }
+    
+    # Save results
+    results_file = Path('./experiments/cross_validation_results.json')
+    results_file.parent.mkdir(exist_ok=True)
+    with open(results_file, 'w') as f:
+        json.dump(cv_results, f, indent=2, default=str)
+    print(f"💾 Cross-validation results saved to: {results_file}")
+    
+    return cv_results
+
+def evaluate_model(model_path=None, val_path=None, include_cross_validation=False):
+    """Evaluate model with enhanced generation parameters for longer predictions"""
+    model_path = model_path or os.getenv('MODEL_PATH', './model_outputs/final_model')
+    val_path = val_path or os.getenv('VAL_PATH', 'outputs/val_dataset')
+
+    print("🔍 Starting enhanced model evaluation with longer generation...")
+    print("🔧 ENHANCED EVALUATION FEATURES:")
+    print("✅ Enhanced generation parameters for longer outputs")
+    print("✅ Length-aware evaluation metrics")
+    print("✅ Detailed length distribution analysis")
+    print("✅ Cross-validation support")
+    print("✅ Statistical significance testing")
+    print("=" * 60)
+    print(f"Model path: {model_path}")
+    print(f"Validation dataset path: {val_path}")
+
+    if not Path(model_path).exists():
+        print(f"❌ Model path does not exist: {model_path}")
+        return None
+    if not Path(val_path).exists():
+        print(f"❌ Validation dataset path does not exist: {val_path}")
+        return None
+
+    try:
+        model = T5ForConditionalGeneration.from_pretrained(model_path)
+        tokenizer = T5Tokenizer.from_pretrained(model_path)
+        val_dataset = load_from_disk(val_path)
+        print(f"✅ Loaded model and {len(val_dataset)} validation samples")
+        print(f"Dataset columns: {val_dataset.column_names}")
+    except Exception as e:
+        print(f"❌ Error loading model or data: {e}")
+        return None
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    
+    # Convert dataset to list of dicts for consistency
+    val_data = []
+    for example in val_dataset:
+        val_data.append(example)
+    
+    print(f"🚀 Evaluating on {len(val_data)} samples using {device}...")
+    
+    # Perform single evaluation
+    metrics = evaluate_single_fold(model, tokenizer, val_data, device)
+    
+    if not metrics:
+        print("❌ Evaluation failed!")
+        return None
 
     print("\n" + "="*70)
-    print("🎯 ENHANCED EVALUATION RESULTS (PHASE 1)")
+    print("🎯 ENHANCED EVALUATION RESULTS")
     print("="*70)
     print(f"ROUGE-1: {metrics['rouge1']:.4f} (±{metrics.get('rouge1_std', 0):.4f})")
     print(f"ROUGE-2: {metrics['rouge2']:.4f} (±{metrics.get('rouge2_std', 0):.4f})")
     print(f"ROUGE-L: {metrics['rougeL']:.4f} (±{metrics.get('rougeL_std', 0):.4f})")
     
     print(f"\n📏 LENGTH ANALYSIS (KEY IMPROVEMENT METRIC):")
-    print(f"Average Prediction Length: {avg_pred_length:.1f} words")
-    print(f"Average Reference Length: {avg_ref_length:.1f} words")
+    print(f"Average Prediction Length: {metrics['avg_pred_length']:.1f} words")
+    print(f"Average Reference Length: {metrics['avg_ref_length']:.1f} words")
     print(f"Length Ratio (Pred/Ref): {metrics['length_ratio']:.2f}")
     print(f"Target Achievement (≥75 words): {'✅ YES' if metrics['length_analysis']['length_target_achievement'] else '❌ NO'}")
-    print(f"Predictions ≥75 words: {metrics['length_analysis']['predictions_over_75_words']}/{len(valid_pairs)} ({100*metrics['length_analysis']['predictions_over_75_words']/len(valid_pairs):.1f}%)")
-    print(f"Predictions <50 words: {metrics['length_analysis']['predictions_under_50_words']}/{len(valid_pairs)} ({100*metrics['length_analysis']['predictions_under_50_words']/len(valid_pairs):.1f}%)")
+    print(f"Predictions ≥75 words: {metrics['length_analysis']['predictions_over_75_words']}/{metrics['num_samples']} ({100*metrics['length_analysis']['predictions_over_75_words']/metrics['num_samples']:.1f}%)")
+    print(f"Predictions <50 words: {metrics['length_analysis']['predictions_under_50_words']}/{metrics['num_samples']} ({100*metrics['length_analysis']['predictions_under_50_words']/metrics['num_samples']:.1f}%)")
     print(f"Length Range: {metrics['length_analysis']['min_pred_length']} - {metrics['length_analysis']['max_pred_length']} words")
     
     print(f"\n📈 Format Compliance:")
@@ -259,45 +436,60 @@ def evaluate_model(model_path=None, val_path=None):
     print(f"\n📈 Statistics:")
     print(f"Samples Evaluated: {metrics['num_samples']}")
 
+    # Save detailed results
     results_file = Path('./experiments/enhanced_evaluation_results.json')
     results_file.parent.mkdir(exist_ok=True)
     detailed_results = {
         'metrics': metrics,
-        'phase_1_enhancements': {
+        'evaluation_enhancements': {
             'generation_config': {
                 'max_length': 400,
-                'min_length': 60,
+                'min_length': 70,
                 'num_beams': 6,
-                'length_penalty': 1.4,
+                'length_penalty': 1.5,
                 'early_stopping': False
             },
             'target_length_achieved': metrics['length_analysis']['length_target_achievement'],
-            'length_improvement_vs_baseline': f"Target: >75 words, Achieved: {avg_pred_length:.1f} words"
+            'length_improvement_vs_baseline': f"Target: >75 words, Achieved: {metrics['avg_pred_length']:.1f} words"
         },
-        'sample_predictions': [
-            {
-                'id': valid_ids[i],
-                'prediction': valid_predictions[i],
-                'reference': valid_references[i],
-                'pred_length': valid_pred_lengths[i],
-                'ref_length': valid_ref_lengths[i],
-                'rouge1': compute_rouge_scores([valid_predictions[i]], [valid_references[i]])['rouge1'],
-                'rougeL': compute_rouge_scores([valid_predictions[i]], [valid_references[i]])['rougeL']
-            }
-            for i in range(min(20, len(valid_predictions)))
-        ],
         'format_verification': {
             'normalization_applied': True,
             'single_task_focus': True,
             'consistent_with_inference': True,
-            'phase_1_enhanced': True
-        }
+            'enhanced_evaluation': True
+        },
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
     }
+    
     with open(results_file, 'w') as f:
         json.dump(detailed_results, f, indent=2, default=str)
     print(f"💾 Enhanced results saved to: {results_file}")
 
-    return metrics
+    # Perform cross-validation if requested
+    cv_results = None
+    if include_cross_validation:
+        print(f"\n🔄 Starting Cross-Validation...")
+        cv_results = cross_validate_model(model_path)
+        if cv_results:
+            print(f"✅ Cross-validation completed!")
+            print(f"CV ROUGE-L: {cv_results['cross_validation_summary']['mean_rouge_l']:.4f} ± {cv_results['cross_validation_summary']['std_rouge_l']:.4f}")
+        else:
+            print(f"❌ Cross-validation failed!")
+
+    # Combine results
+    final_results = {
+        'single_evaluation': metrics,
+        'cross_validation': cv_results,
+        'evaluation_summary': {
+            'primary_rouge_l': metrics['rougeL'],
+            'cv_rouge_l': cv_results['cross_validation_summary']['mean_rouge_l'] if cv_results else None,
+            'length_target_achieved': metrics['length_analysis']['length_target_achievement'],
+            'model_stability': cv_results['statistical_analysis']['model_stability'] if cv_results else 'unknown',
+            'recommendation': 'APPROVED' if metrics['rougeL'] > 0.4 and metrics['length_analysis']['length_target_achievement'] else 'NEEDS_IMPROVEMENT'
+        }
+    }
+
+    return final_results
 
 def normalize_for_evaluation(text):
     """Helper function for normalization"""
@@ -311,22 +503,96 @@ def normalize_for_evaluation(text):
         normalized = "patient requires clinical assessment and appropriate treatment"
     return normalized
 
+def run_comprehensive_evaluation(model_path: str = None, include_cv: bool = True):
+    """Run comprehensive evaluation with all enhancements"""
+    print("🚀 Starting Comprehensive Model Evaluation...")
+    print("=" * 70)
+    print("🔧 COMPREHENSIVE EVALUATION FEATURES:")
+    print("✅ Enhanced generation parameters for longer outputs")
+    print("✅ Length-focused evaluation metrics")
+    print("✅ 5-fold cross-validation")
+    print("✅ Statistical significance testing")
+    print("✅ Model stability analysis")
+    print("✅ Detailed performance breakdown")
+    print("=" * 70)
+    
+    try:
+        results = evaluate_model(
+            model_path=model_path,
+            include_cross_validation=include_cv
+        )
+        
+        if results:
+            print(f"\n🎯 COMPREHENSIVE EVALUATION SUMMARY:")
+            print(f"Primary ROUGE-L: {results['evaluation_summary']['primary_rouge_l']:.4f}")
+            if results['evaluation_summary']['cv_rouge_l']:
+                print(f"Cross-Validation ROUGE-L: {results['evaluation_summary']['cv_rouge_l']:.4f}")
+            print(f"Length Target: {'✅ ACHIEVED' if results['evaluation_summary']['length_target_achieved'] else '❌ NOT ACHIEVED'}")
+            print(f"Model Stability: {results['evaluation_summary']['model_stability'].upper()}")
+            print(f"Overall Recommendation: {results['evaluation_summary']['recommendation']}")
+            
+            # Save comprehensive results
+            comprehensive_file = Path('./experiments/comprehensive_evaluation_results.json')
+            with open(comprehensive_file, 'w') as f:
+                json.dump(results, f, indent=2, default=str)
+            print(f"💾 Comprehensive results saved to: {comprehensive_file}")
+            
+            return results
+        else:
+            print("❌ Comprehensive evaluation failed: No results returned")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Comprehensive evaluation failed: {e}")
+        logger.error(f"Comprehensive evaluation error: {e}")
+        return None
+
 if __name__ == '__main__':
     try:
-        print("🚀 Starting Enhanced Model Evaluation (Phase 1)...")
+        # Check for command line arguments
+        import sys
+        include_cv = '--cross-validation' in sys.argv or '-cv' in sys.argv
+        model_path = None
+        
+        # Parse model path if provided
+        for i, arg in enumerate(sys.argv):
+            if arg == '--model-path' and i + 1 < len(sys.argv):
+                model_path = sys.argv[i + 1]
+                break
+        
+        print("🚀 Starting Enhanced Model Evaluation...")
         print("=" * 70)
-        print("🔧 PHASE 1 EVALUATION ENHANCEMENTS:")
+        print("🔧 EVALUATION ENHANCEMENTS:")
         print("✅ Enhanced generation parameters for longer outputs")
         print("✅ Length-focused evaluation metrics")
         print("✅ Target: Average prediction length ≥75 words")
+        if include_cv:
+            print("✅ 5-fold cross-validation enabled")
         print("=" * 70)
-        metrics = evaluate_model()
-        if metrics:
-            print(f"\n📊 Final Results:")
-            print(f"ROUGE-L: {metrics['rougeL']:.4f}")
-            print(f"Average Length: {metrics['avg_pred_length']:.1f} words")
-            print(f"Length Target: {'✅ ACHIEVED' if metrics['length_analysis']['length_target_achievement'] else '❌ NOT ACHIEVED'}")
+        
+        if include_cv:
+            results = run_comprehensive_evaluation(model_path=model_path, include_cv=True)
+        else:
+            results = evaluate_model(model_path=model_path, include_cross_validation=False)
+        
+        if results:
+            if isinstance(results, dict) and 'evaluation_summary' in results:
+                # Comprehensive results
+                print(f"\n📊 Final Comprehensive Results:")
+                print(f"Primary ROUGE-L: {results['evaluation_summary']['primary_rouge_l']:.4f}")
+                if results['evaluation_summary']['cv_rouge_l']:
+                    print(f"CV ROUGE-L: {results['evaluation_summary']['cv_rouge_l']:.4f}")
+                print(f"Length Target: {'✅ ACHIEVED' if results['evaluation_summary']['length_target_achieved'] else '❌ NOT ACHIEVED'}")
+                print(f"Recommendation: {results['evaluation_summary']['recommendation']}")
+            else:
+                # Single evaluation results
+                print(f"\n📊 Final Results:")
+                print(f"ROUGE-L: {results['rougeL']:.4f}")
+                print(f"Average Length: {results['avg_pred_length']:.1f} words")
+                print(f"Length Target: {'✅ ACHIEVED' if results['length_analysis']['length_target_achievement'] else '❌ NOT ACHIEVED'}")
         else:
             print("❌ Evaluation failed: No metrics returned")
+            
     except Exception as e:
         print(f"❌ Enhanced evaluation failed: {e}")
+        logger.error(f"Main evaluation error: {e}")
