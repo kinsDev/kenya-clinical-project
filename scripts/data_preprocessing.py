@@ -336,6 +336,7 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
     augmented_data = []
     from transformers import T5Tokenizer
     tokenizer = T5Tokenizer.from_pretrained("t5-base")  # Updated to t5-base
+    
     for idx, row in df.iterrows():
         prompt = str(row['Prompt'])
         prompt_data = augment_prompt(prompt, augmentation_factor)
@@ -348,6 +349,15 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
                     new_row['labels'] = str(row[col]) if pd.notnull(row[col]) else ""  # Rename to labels
                 elif col != 'Prompt':
                     new_row[col] = str(row[col]) if pd.notnull(row[col]) else ""
+            
+            # Validate that both Prompt and labels are non-empty strings
+            if not new_row['Prompt'] or not isinstance(new_row['Prompt'], str) or not new_row['Prompt'].strip():
+                logging.warning(f"Row {idx}: Empty or invalid Prompt, skipping")
+                continue
+            if not new_row['labels'] or not isinstance(new_row['labels'], str) or not new_row['labels'].strip():
+                logging.warning(f"Row {idx}: Empty or invalid labels, skipping")
+                continue
+                
             # Check token lengths
             prompt_tokens = len(tokenizer(new_row['Prompt']).input_ids)
             label_tokens = len(tokenizer(new_row['labels']).input_ids) if new_row['labels'] else 0
@@ -355,14 +365,43 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
                 logging.warning(f"Row {idx}: Prompt tokens={prompt_tokens}, Label tokens={label_tokens} exceed 512")
             augmented_data.append(new_row)
 
+    if not augmented_data:
+        raise ValueError("No valid data after preprocessing and augmentation")
+        
+    print(f"✅ Created {len(augmented_data)} samples after augmentation")
+    logging.info(f"Created {len(augmented_data)} samples after augmentation")
+
     dataset = Dataset.from_list(augmented_data)
     train_val_split = dataset.train_test_split(test_size=0.15, seed=42)
     train_val_split['train'].save_to_disk(f"{output_dir}/train_dataset")
     train_val_split['test'].save_to_disk(f"{output_dir}/val_dataset")
+    
+    # Process test data
     test_df = pd.read_csv("data/test.csv")
     # Apply same prompt format to test data
     test_df['Prompt'] = test_df['Prompt'].apply(lambda x: f"Clinical scenario: {x}")
-    Dataset.from_pandas(test_df).save_to_disk(f"{output_dir}/test_dataset")
+    
+    # Ensure test data has the required structure
+    test_data = []
+    for idx, row in test_df.iterrows():
+        test_row = {}
+        for col in test_df.columns:
+            test_row[col] = str(row[col]) if pd.notnull(row[col]) else ""
+        # Validate Prompt
+        if not test_row['Prompt'] or not isinstance(test_row['Prompt'], str) or not test_row['Prompt'].strip():
+            logging.warning(f"Test row {idx}: Empty or invalid Prompt, using fallback")
+            test_row['Prompt'] = "Clinical scenario: Patient requires assessment"
+        test_data.append(test_row)
+    
+    test_dataset = Dataset.from_list(test_data)
+    test_dataset.save_to_disk(f"{output_dir}/test_dataset")
+    
+    print(f"✅ Datasets saved:")
+    print(f"  - Train: {len(train_val_split['train'])} samples")
+    print(f"  - Validation: {len(train_val_split['test'])} samples") 
+    print(f"  - Test: {len(test_dataset)} samples")
+    logging.info(f"Datasets saved - Train: {len(train_val_split['train'])}, Val: {len(train_val_split['test'])}, Test: {len(test_dataset)}")
+
 
 if __name__ == "__main__":
     preprocess_data("data/train.csv", "outputs", augmentation_factor=3)

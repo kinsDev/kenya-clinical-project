@@ -75,6 +75,7 @@ def compute_rouge_scores(predictions, references):
         'rougeL_std': np.std(rougeL_scores)
     }
 
+
 def evaluate_model(model_path=None, val_path=None):
     """Evaluate model with enhanced generation parameters for longer predictions"""
     model_path = model_path or os.getenv('MODEL_PATH', './model_outputs/final_model')
@@ -101,6 +102,7 @@ def evaluate_model(model_path=None, val_path=None):
         tokenizer = T5Tokenizer.from_pretrained(model_path)
         val_dataset = load_from_disk(val_path)
         print(f"✅ Loaded model and {len(val_dataset)} validation samples")
+        print(f"Dataset columns: {val_dataset.column_names}")
     except Exception as e:
         print(f"❌ Error loading model or data: {e}")
         return None
@@ -123,8 +125,23 @@ def evaluate_model(model_path=None, val_path=None):
             try:
                 sample_id = example.get('Master_Index', f'VAL_{i:08d}')
                 sample_ids.append(sample_id)
-                input_ids = torch.tensor([example['input_ids']], device=device)
-                attention_mask = torch.tensor([example['attention_mask']], device=device)
+                
+                # Handle both tokenized and non-tokenized data
+                if 'input_ids' in example:
+                    # Data is already tokenized
+                    input_ids = torch.tensor([example['input_ids']], device=device)
+                    attention_mask = torch.tensor([example['attention_mask']], device=device)
+                else:
+                    # Data needs tokenization
+                    inputs = tokenizer(
+                        example['Prompt'],
+                        return_tensors='pt',
+                        truncation=True,
+                        padding='max_length',
+                        max_length=512
+                    )
+                    input_ids = inputs['input_ids'].to(device)
+                    attention_mask = inputs['attention_mask'].to(device)
                 
                 # ENHANCED GENERATION PARAMETERS FOR LONGER OUTPUTS
                 outputs = model.generate(
@@ -143,9 +160,19 @@ def evaluate_model(model_path=None, val_path=None):
                 generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 pred_summary = normalize_for_evaluation(generated_text)
                 
-                labels = example['labels']
-                labels = [token for token in labels if token != -100]
-                ref_text = tokenizer.decode(labels, skip_special_tokens=True)
+                # Handle labels - check if they're tokenized or raw text
+                if 'labels' in example:
+                    if isinstance(example['labels'], list):
+                        # Labels are tokenized
+                        labels = [token for token in example['labels'] if token != -100]
+                        ref_text = tokenizer.decode(labels, skip_special_tokens=True)
+                    else:
+                        # Labels are raw text
+                        ref_text = example['labels']
+                else:
+                    # Fallback - look for other possible label columns
+                    ref_text = example.get('Clinician', 'patient requires clinical assessment')
+                
                 ref_summary = normalize_for_evaluation(ref_text)
                 
                 predictions.append(pred_summary)
@@ -163,6 +190,7 @@ def evaluate_model(model_path=None, val_path=None):
                 prediction_lengths.append(0)
                 reference_lengths.append(0)
 
+    # Rest of the evaluation function remains the same...
     print("📊 Computing enhanced metrics with length analysis...")
     valid_pairs = [(p, r, sid, pl, rl) for p, r, sid, pl, rl in zip(predictions, references, sample_ids, prediction_lengths, reference_lengths) if p.strip() and r.strip()]
     if not valid_pairs:

@@ -75,6 +75,17 @@ class MedicalT5Trainer:
             logging.error(f"Failed to load model: {e}")
             raise
 
+    def preprocess_function(self, examples):
+        """Tokenize the dataset properly"""
+        inputs = [ex for ex in examples['Prompt']]
+        targets = [ex for ex in examples['labels']]
+        
+        model_inputs = self.tokenizer(inputs, max_length=512, truncation=True, padding=False)
+        labels = self.tokenizer(targets, max_length=512, truncation=True, padding=False)
+        
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+
     def train(self, epochs=None):
         print("🚀 Starting training...")
         logging.info("Starting training...")
@@ -121,63 +132,34 @@ class MedicalT5Trainer:
                 'Prompt' in example and isinstance(example['Prompt'], str) and example['Prompt'].strip() and
                 'labels' in example and isinstance(example['labels'], str) and example['labels'].strip()
             )
+        
         original_train_size = len(train_dataset)
         original_val_size = len(val_dataset)
         train_dataset = train_dataset.filter(filter_valid, num_proc=1)
         val_dataset = val_dataset.filter(filter_valid, num_proc=1)
         print(f"✅ After filtering - Train: {len(train_dataset)} (from {original_train_size}), Val: {len(val_dataset)} (from {original_val_size})")
         logging.info(f"After filtering - Train: {len(train_dataset)} (from {original_train_size}), Val: {len(val_dataset)} (from {original_val_size})")
+        
         if len(train_dataset) == 0 or len(val_dataset) == 0:
             raise ValueError("No valid samples after filtering")
     
         self.load_model()
-    
-        # Debug batch creation
-        def custom_collate(batch):
-            print(f"Debug: Processing batch of size {len(batch)}")
-            logging.info(f"Processing batch of size {len(batch)}")
-            if not batch:
-                print("❌ Empty batch detected!")
-                logging.error("Empty batch detected in custom_collate")
-                raise ValueError("DataLoader produced an empty batch")
-            valid_batch = []
-            for i, item in enumerate(batch):
-                if not isinstance(item, dict):
-                    print(f"❌ Batch item {i}: Not a dictionary: {type(item)}")
-                    logging.error(f"Batch item {i}: Not a dictionary: {type(item)}")
-                    continue
-                if 'Prompt' not in item or 'labels' not in item:
-                    print(f"❌ Batch item {i}: Missing required keys: {list(item.keys())}")
-                    logging.error(f"Batch item {i}: Missing required keys: {list(item.keys())}")
-                    continue
-                if not isinstance(item['Prompt'], str) or not item['Prompt'].strip():
-                    print(f"❌ Batch item {i}: Invalid Prompt: {item['Prompt']}")
-                    logging.error(f"Batch item {i}: Invalid Prompt: {item['Prompt']}")
-                    continue
-                if not isinstance(item['labels'], str) or not item['labels'].strip():
-                    print(f"❌ Batch item {i}: Invalid labels: {item['labels']}")
-                    logging.error(f"Batch item {i}: Invalid labels: {item['labels']}")
-                    continue
-                try:
-                    prompt_encoding = self.tokenizer(item['Prompt'], truncation=True, max_length=512)
-                    label_encoding = self.tokenizer(item['labels'], truncation=True, max_length=512)
-                    print(f"  Batch item {i}: Prompt={item['Prompt'][:50]}..., Labels={item['labels'][:50]}...")
-                    print(f"  Batch item {i}: Prompt tokens={len(prompt_encoding['input_ids'])}, Label tokens={len(label_encoding['input_ids'])}")
-                    logging.info(f"Batch item {i}: Prompt={item['Prompt'][:50]}..., Labels={item['labels'][:50]}..., Prompt tokens={len(prompt_encoding['input_ids'])}, Label tokens={len(label_encoding['input_ids'])}")
-                    if not prompt_encoding['input_ids'] or not label_encoding['input_ids']:
-                        print(f"❌ Batch item {i}: Empty encoding detected!")
-                        logging.error(f"Batch item {i}: Empty encoding detected!")
-                        continue
-                    valid_batch.append(item)
-                except Exception as e:
-                    print(f"❌ Batch item {i}: Tokenization failed: {e}")
-                    logging.error(f"Batch item {i}: Tokenization failed: {e}")
-                    continue
-            if not valid_batch:
-                print("❌ No valid items in batch after filtering!")
-                logging.error("No valid items in batch after filtering")
-                raise ValueError("No valid items in batch after filtering")
-            return data_collator(valid_batch)
+        
+        # Tokenize datasets
+        print("🔧 Tokenizing datasets...")
+        train_dataset = train_dataset.map(
+            self.preprocess_function,
+            batched=True,
+            remove_columns=train_dataset.column_names
+        )
+        val_dataset = val_dataset.map(
+            self.preprocess_function,
+            batched=True,
+            remove_columns=val_dataset.column_names
+        )
+        
+        print(f"✅ Tokenized datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+        logging.info(f"Tokenized datasets - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
     
         training_args = TrainingArguments(
             output_dir=f"{self.output_dir}/training",
@@ -229,7 +211,7 @@ class MedicalT5Trainer:
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
-            data_collator=custom_collate,
+            data_collator=data_collator,
             optimizers=(optimizer, None),
             callbacks=[EarlyStoppingCallback(early_stopping_patience=self.config.vignette_training.early_stopping_patience)]
         )
@@ -308,6 +290,7 @@ def main(cfg: DictConfig):
         print("✅ Fixed config path access")
         print("✅ Updated for direct config loading")
         print("✅ Switched to AdaFactor only")
+        print("✅ Fixed dataset tokenization")
         print("=" * 40)
         trainer.train()
         print("\n" + "=" * 60)
