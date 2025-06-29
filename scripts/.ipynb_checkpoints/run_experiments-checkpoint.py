@@ -234,6 +234,9 @@ EXPERIMENT_BATCHES = {
     ],
     9: [
         ("improved_training_aug", "improved_training_aug")
+    ],
+    10: [
+        ("stable_training_v1", "stable_training_v1")
     ]
 }
 

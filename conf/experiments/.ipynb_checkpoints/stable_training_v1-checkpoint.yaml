@@ -1,0 +1,60 @@
+# conf/experiments/stable_training_v1.yaml - PHASE 1: Training Stability Fix
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-base
+
+vignette_training:
+  epochs: 12  # Reduced from 15 to prevent overtraining
+  batch_size: 4  # Reduced for more stable gradients
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4  # Increased to maintain effective batch size
+  learning_rate: 0.0005  # Reduced from 0.0008 for stability
+  warmup_steps: 150  # Increased warmup for smoother start
+  warmup_ratio: 0.15  # Add warmup ratio for better scheduling
+  weight_decay: 0.01  # Reduced from 0.02 to prevent over-regularization
+  eval_steps: 20  # More frequent evaluation for better monitoring
+  save_steps: 20
+  early_stopping_patience: 6  # Reduced for faster stopping
+  label_smoothing_factor: 0.1  # Reduced from 0.15
+  
+  # NEW: Advanced stability parameters
+  max_grad_norm: 0.3  # Aggressive gradient clipping
+  lr_scheduler_type: "linear"  # Compatible with transformers 4.44.2
+  min_learning_rate: 1e-6  # Lower minimum LR
+  
+  # NEW: Regularization improvements
+  dropout_rate: 0.1  # Controlled dropout
+  attention_dropout: 0.1
+  activation_dropout: 0.1
+
+# Enhanced generation parameters
+generation:
+  max_length: 380
+  min_length: 65
+  num_beams: 5
+  early_stopping: false
+  do_sample: false
+  repetition_penalty: 1.12
+  length_penalty: 1.4
+  no_repeat_ngram_size: 3
+
+# Optimization settings
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  
+  # NEW: Advanced optimizer settings (compatible with transformers 4.44.2)
+  adafactor_scale_parameter: true
+  adafactor_relative_step: false
+  adafactor_warmup_init: false
+  adafactor_clip_threshold: 1.0
+
+paths:
+  output_dir: ./experiments/stable_training_v1
+  logs_dir: ./experiments/stable_training_v1/logs
