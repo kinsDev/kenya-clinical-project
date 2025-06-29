@@ -1,0 +1,42 @@
+# conf/experiments/improved_training_aug.yaml
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-base
+
+vignette_training:
+  epochs: 15  # Reduced to prevent overfitting
+  batch_size: 6  # Slightly larger
+  eval_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 0.0008  # Slightly lower
+  warmup_steps: 100
+  weight_decay: 0.02  # Increased regularization
+  eval_steps: 25  # More frequent evaluation
+  save_steps: 25
+  early_stopping_patience: 8  # More aggressive early stopping
+  label_smoothing_factor: 0.15  # Increased smoothing
+
+# Add regularization
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+  max_grad_norm: 0.5  # Gradient clipping
+  dropout: 0.15  # Add dropout
+
+generation:
+  max_length: 350  # Slightly reduced
+  min_length: 60
+  num_beams: 6  # increased from 4
+  early_stopping: false
+  do_sample: false
+  repetition_penalty: 1.1
+  length_penalty: 1.3
+  no_repeat_ngram_size: 3
+
+paths:
+  output_dir: ./experiments/improved_training_aug
+  logs_dir: ./experiments/improved_training_aug/logs

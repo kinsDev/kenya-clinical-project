@@ -318,7 +318,7 @@ def augment_prompt(prompt: str, augmentation_factor: int = 3) -> List[Dict]:
             augmented_data.append({"Prompt": prompt, "augmentation_type": "original"})
     return augmented_data
 
-def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int = 3) -> None:
+def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int = 5) -> None:
     """Preprocess and augment dataset, saving as Hugging Face datasets."""
     os.makedirs(output_dir, exist_ok=True)
     df = pd.read_csv(input_file)
@@ -403,4 +403,4 @@ def preprocess_data(input_file: str, output_dir: str, augmentation_factor: int =
     logging.info(f"Datasets saved - Train: {len(train_val_split['train'])}, Val: {len(train_val_split['test'])}, Test: {len(test_dataset)}")
 
 if __name__ == "__main__":
-    preprocess_data("data/train.csv", "outputs", augmentation_factor=3)
+    preprocess_data("data/train.csv", "outputs", augmentation_factor=5)
