@@ -23,7 +23,7 @@ optimization:
   dataloader_pin_memory: false
   gradient_checkpointing: true
   max_grad_norm: 0.5            # Enhanced gradient clipping
-  dropout: 0.2                 # Dropout regularization
+  dropout: 0.15                 # Dropout regularization
 
 generation:
   max_length: 350               # Increased from 300

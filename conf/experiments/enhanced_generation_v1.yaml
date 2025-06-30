@@ -1,0 +1,93 @@
+# conf/experiments/enhanced_generation_v1.yaml - PHASE 2: Generation Quality Enhancement
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-base
+
+# Inherit stable training parameters from Phase 1
+vignette_training:
+  epochs: 12  # Keep stable from Phase 1
+  batch_size: 4
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0005
+  warmup_steps: 150
+  warmup_ratio: 0.15
+  weight_decay: 0.01
+  eval_steps: 20
+  save_steps: 20
+  early_stopping_patience: 6
+  label_smoothing_factor: 0.1
+  
+  # Phase 1 stability parameters (keep)
+  max_grad_norm: 0.3
+  lr_scheduler_type: "linear"
+  min_learning_rate: 1e-6
+  dropout_rate: 0.1
+  attention_dropout: 0.1
+  activation_dropout: 0.1
+
+# PHASE 2: ENHANCED GENERATION PARAMETERS
+generation:
+  # Length optimization for better ROUGE scores
+  max_length: 420  # Increased from 380
+  min_length: 80   # Increased from 65 for longer responses
+  
+  # Diverse beam search for better quality
+  num_beams: 8              # Increased from 5
+  num_beam_groups: 4        # NEW: Diverse beam search
+  diversity_penalty: 0.8    # NEW: Encourage diverse outputs
+  
+  # Advanced sampling control
+  early_stopping: false     # Keep generating full content
+  do_sample: false         # Deterministic for consistency
+  
+  # Optimized penalties for clinical text
+  repetition_penalty: 1.08  # Reduced from 1.12 (clinical terms repeat naturally)
+  length_penalty: 1.6       # Increased from 1.4 (strongly favor longer)
+  no_repeat_ngram_size: 2   # Reduced from 3 (allow medical repetition)
+  
+  # NEW: Advanced generation controls
+  encoder_no_repeat_ngram_size: 3  # Prevent input repetition
+  bad_words_ids: null              # No word restrictions
+  force_words_ids: null            # No forced words
+  renormalize_logits: true         # Better probability distribution
+  
+  # NEW: Temperature and top-k/top-p (for fallback sampling)
+  temperature: 1.0
+  top_k: 50
+  top_p: 0.95
+
+# PHASE 2: POST-PROCESSING ENHANCEMENTS
+post_processing:
+  # Clinical terminology preservation
+  preserve_medical_terms: true
+  medical_abbreviations: ["TB", "HIV", "BP", "HR", "RR", "O2", "IV", "IM", "PO"]
+  
+  # Length optimization
+  target_word_count: 100    # Target longer responses
+  min_sentence_count: 4     # Ensure multiple sentences
+  
+  # Quality filters
+  remove_incomplete_sentences: true
+  ensure_clinical_structure: true
+  
+# Enhanced optimization settings
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  
+  # Keep Phase 1 Adafactor settings
+  adafactor_scale_parameter: true
+  adafactor_relative_step: false
+  adafactor_warmup_init: false
+  adafactor_clip_threshold: 1.0
+
+paths:
+  output_dir: ./experiments/enhanced_generation_v1
+  logs_dir: ./experiments/enhanced_generation_v1/logs

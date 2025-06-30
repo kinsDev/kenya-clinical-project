@@ -1,0 +1,65 @@
+# conf/experiments/phase3_data_quality.yaml - PHASE 3: Data Quality Focus
+defaults:
+  - ../config
+  - _self_
+
+model:
+  name: t5-base
+
+# PHASE 3: Back to proven parameters + data quality focus
+vignette_training:
+  epochs: 12  # Proven from Phase 1
+  batch_size: 4  # Stable batch size
+  eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 0.0005  # Proven learning rate
+  warmup_steps: 150
+  weight_decay: 0.01
+  eval_steps: 20
+  save_steps: 20
+  early_stopping_patience: 6
+  label_smoothing_factor: 0.1
+  
+  # Proven stability parameters
+  max_grad_norm: 0.3
+  lr_scheduler_type: "linear"
+  
+  # PHASE 3: Data quality monitoring
+  log_data_quality: true
+  quality_threshold: 0.7
+
+# PHASE 3: Simplified generation (back to Phase 1 proven parameters)
+generation:
+  max_length: 380  # Proven from Phase 1
+  min_length: 65
+  num_beams: 5     # Simplified from Phase 2
+  early_stopping: false
+  do_sample: false
+  repetition_penalty: 1.12
+  length_penalty: 1.4
+  no_repeat_ngram_size: 3
+
+# PHASE 3: Data quality settings
+data_quality:
+  augmentation_factor: 3
+  quality_threshold: 0.7
+  max_augmentation_attempts: 8
+  preserve_original_ratio: 0.4  # 40% original, 60% augmented
+  
+  # Quality scoring weights
+  quality_weights:
+    length_score: 0.3
+    medical_term_score: 0.25
+    structure_score: 0.2
+    diversity_score: 0.15
+    clinical_relevance_score: 0.1
+
+optimization:
+  fp16: true
+  dataloader_pin_memory: false
+  gradient_checkpointing: true
+  dataloader_num_workers: 0
+
+paths:
+  output_dir: ./experiments/phase3_data_quality
+  logs_dir: ./experiments/phase3_data_quality/logs
