@@ -1,6 +1,10 @@
 # Kenya Clinical Healthcare Project
 
-This project develops an AI model to predict clinician responses to medical scenarios in rural Kenyan healthcare settings, replicating the expertise of trained professionals. It aims to support healthcare workers in resource-limited environments by providing accurate, context-aware responses. The model, based on T5, is evaluated using ROUGE scores, which measure how closely its predictions match expert responses. The project is designed to be modular, scalable, and user-friendly, with a clear directory structure, modular scripts, and a Jupyter notebook for orchestration.
+This project was aimed at developing an AI model that predicts clinician responses to medical scenarios in rural Kenyan healthcare settings, replicating the expertise of trained professionals. It aims to support healthcare workers in resource-limited environments by providing accurate, context-aware responses. The model, based on T5, is evaluated using ROUGE scores, which measure how closely its predictions match expert responses. The project is designed to be modular, scalable, and user-friendly, with a clear directory structure, modular scripts, and a Jupyter notebook for orchestration.
+
+## Achievements and Competition Context
+
+This project achieved a significant milestone in the **Global Helping Kenya Competition**, a global challenge held from **April 3rd to June 30th, 2025**, aimed at leveraging AI to improve healthcare in Kenya. Despite joining just three weeks before the deadline, the model developed here secured a **ROUGE score of 0.4251** on the leaderboard, ranking **11th out of 1640 competitors worldwide**. This success is particularly notable given that many participants had a two-month head start from April, demonstrating the project's efficiency and the rapid adaptability of its design. This achievement underscores the potential of the pipeline to deliver high-impact results in competitive settings and real-world healthcare applications.
 
 ## Directory Structure
 
