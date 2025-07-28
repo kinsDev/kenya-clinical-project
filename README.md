@@ -311,5 +311,5 @@ This design ensures scalability:
 - **Can it be used in the real world?**
   - Yes! The system is designed to be flexible and can be scaled up to work in hospitals or on cloud platforms, making it practical for real healthcare needs.
 
-## Contact
-- X: @king_sley007
+## Author
+- Kinsley Kaimenyi Gitonga
